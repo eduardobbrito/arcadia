@@ -11,8 +11,8 @@
   <header>
     <img src="../icons/icon128.png" width="56" height="56" alt="">
     <div>
-      <h1>Arcadia</h1>
-      <p>An Arc-style sidebar, spaces and a command bar for Chrome.</p>
+      <h1>Arcadia for Dia</h1>
+      <p>Spaces inside a profile, mini windows, cleaned links and Clear.</p>
     </div>
   </header>
 
@@ -20,41 +20,40 @@
     <h2>Set it up</h2>
     <ol class="steps">
       <li>
-        <strong>Open the sidebar.</strong> Click the Arcadia icon in Chrome's toolbar, or press <kbd data-cmd="_execute_action"></kbd>. Pin the icon from the puzzle-piece menu so it stays visible.
+        <strong>Pin Arcadia to the toolbar.</strong> Click its icon, or press <kbd data-cmd="_execute_action"></kbd>, to open the spaces menu.
       </li>
       <li>
-        <strong>Move it to the left.</strong> In Chrome's Appearance settings, set “Side panel position” to left.
-        <button type="button" data-open="chrome://settings/appearance">Open Appearance settings</button>
+        <strong>Add a space.</strong> Choose “New space” in the menu. Dia's sidebar then shows the space you are in; the others are folded away as groups, or sit in their own windows.
       </li>
       <li>
-        <strong>Keep one sidebar.</strong> If Chrome's vertical tabs are on, you will see two. Right-click Chrome's tab strip and choose “Show Tabs Horizontally”. Chrome does not let an extension restyle or hide that strip, so this step is yours.
+        <strong>Move between spaces.</strong> Use the menu (keys 1 to 9 jump straight to a space), or give “next space” and “previous space” a shortcut below.
       </li>
       <li>
-        <strong>Press <kbd class="mod-t"></kbd>.</strong> The command bar opens over the page you are on. Type an address, a search, or the name of an open tab.
+        <strong>Try a mini window.</strong> Shift-click any link, or press <kbd data-cmd="mini-window"></kbd>. Press <kbd class="mod-o"></kbd> inside it to move the page into your main window.
       </li>
       <li>
-        <strong>Add a space.</strong> Use the + at the bottom of the sidebar, then swipe sideways with two fingers on the sidebar to move between spaces. Drag a tab above the line to pin it to the space.
-      </li>
-      <li>
-        <strong>Want separate logins?</strong> Chrome only separates cookies between Chrome profiles. Add Arcadia to each profile; each one gets its own sidebar and spaces.
+        <strong>Want separate logins?</strong> That is what Dia's own profiles are for. Arcadia's spaces share the logins of the profile they are in; add Arcadia to each profile where you want spaces.
       </li>
     </ol>
-    <p class="tip">Chrome's tab strip along the top cannot be removed, but in full screen it hides if you turn off View › Always Show Toolbar in Full Screen. Then switch on “Back, forward and address in the sidebar” below.</p>
   </section>
 
   <section>
     <h2>Behaviour</h2>
     <div class="opts">
-    <label class="opt"><input type="checkbox" data-key="newTabOpensBar"><span><b>New tab opens the command bar</b><small>Chrome's blank new tab is replaced by the command bar over the current page.</small></span></label>
-    <label class="opt"><input type="checkbox" data-key="copyUrlShortcut"><span><b><kbd class="mod-shift-c"></kbd> copies the page link</b><small>Works on web pages without assigning a shortcut. Turn off to get Chrome's element inspector back on that key.</small></span></label>
+    <label class="opt select"><span><b>Keep spaces as</b><small>Tab groups keep everything in one window. Separate windows work even if the browser will not let an extension manage tab groups. Automatic tries groups first.</small></span>
+      <select data-key="spacesUse" data-kind="text">
+        <option value="auto">Automatic</option>
+        <option value="groups">Tab groups</option>
+        <option value="windows">Separate windows</option>
+      </select>
+    </label>
+    <label class="opt"><input type="checkbox" data-key="collapseOtherSpaces"><span><b>Fold away the spaces you are not in</b><small>With tab groups: only the current space's group stays open in the sidebar. Opening another group switches to that space.</small></span></label>
+    <label class="opt"><input type="checkbox" data-key="copyUrlShortcut"><span><b><kbd class="mod-shift-c"></kbd> copies a cleaned link</b><small>On web pages, where the page receives the key. If Dia handles that key itself, assign “Copy the current page link” a different shortcut below.</small></span></label>
     <label class="opt"><input type="checkbox" data-key="cleanLinks"><span><b>Clean copied links</b><small>Tracking parameters such as utm_source and fbclid are left out.</small></span></label>
-    <label class="opt"><input type="checkbox" data-key="shiftClickMini"><span><b>Shift-click opens a link in a mini window</b><small>A small window with one page and no tabs. Press <kbd class="mod-o"></kbd> inside it to move the page to your main window.</small></span></label>
-    <label class="opt"><input type="checkbox" data-key="externalToMini"><span><b>Links from other apps open in a mini window</b><small>Experimental. Chrome does not say where a new tab came from, so Arcadia guesses from window focus and can guess wrong.</small></span></label>
-    <label class="opt"><input type="checkbox" data-key="collapseOtherSpaces"><span><b>Fold other spaces away in the tab strip</b><small>Only the current space's group stays open. Opening another group switches to that space.</small></span></label>
-    <label class="opt"><input type="checkbox" data-key="pinsPerSpace"><span><b>Pinned tabs belong to their space</b><small>A tab you pin in Chrome's own tab strip is pinned to the current space only. Turn off to pin it in every space.</small></span></label>
-    <label class="opt"><input type="checkbox" data-key="keepPinned"><span><b>With Chrome's vertical tabs: a closed pinned tab reopens asleep</b><small>Arcadia's sidebar keeps a closed pinned tab in its list without this. Chrome's strip cannot, so the tab is reopened in the background once to get its icon, then put to sleep.</small></span></label>
-    <label class="opt"><input type="checkbox" data-key="searchHistory"><span><b>Command bar looks in history and bookmarks</b><small>Read from Chrome on this computer as you type. Nothing is copied or kept.</small></span></label>
-    <label class="opt select"><span><b>Close tabs you have not used for</b><small>Unpinned tabs only. Reopen them from Recently closed (the clock at the bottom of the sidebar) or Chrome's History menu.</small></span>
+    <label class="opt"><input type="checkbox" data-key="shiftClickMini"><span><b>Shift-click opens a link in a mini window</b><small>A small window with one page and no sidebar.</small></span></label>
+    <label class="opt"><input type="checkbox" data-key="externalToMini"><span><b>Links from other apps open in a mini window</b><small>Experimental. The browser does not say where a new tab came from, so Arcadia guesses from window focus and can guess wrong.</small></span></label>
+    <label class="opt"><input type="checkbox" data-key="searchHistory"><span><b>Arcadia's palette looks in history and bookmarks</b><small>Read from the browser on this computer as you type. Nothing is copied or kept.</small></span></label>
+    <label class="opt select"><span><b>Close tabs you have not used for</b><small>Unpinned tabs only. Reopen them from Dia's own history.</small></span>
       <select data-key="archiveAfterHours">
         <option value="0">Never</option>
         <option value="12">12 hours</option>
@@ -63,13 +62,6 @@
         <option value="720">30 days</option>
       </select>
     </label>
-    <label class="opt select"><span><b>Sidebar</b><small>Arcadia's sidebar has the full design: tiles, pinned tabs, swipe between spaces. With Chrome's vertical tabs instead, spaces are groups in Chrome's strip and the toolbar icon opens a spaces menu.</small></span>
-      <select data-key="sidebar" data-kind="text">
-        <option value="arcadia">Arcadia's sidebar</option>
-        <option value="chrome">Chrome's vertical tabs</option>
-      </select>
-    </label>
-    <label class="opt"><input type="checkbox" data-key="panelNav"><span><b>Back, forward and address in the sidebar</b><small>Chrome's toolbar already has these. Useful when you hide the toolbar in full screen.</small></span></label>
     <div class="opt select"><span><b>Mini window size</b><small>Width and height in pixels.</small></span>
       <span class="size"><input type="number" data-key="miniWidth" min="420" max="2400" step="20" aria-label="Mini window width"> × <input type="number" data-key="miniHeight" min="320" max="1800" step="20" aria-label="Mini window height"></span>
     </div>
@@ -78,15 +70,15 @@
 
   <section>
     <h2>Shortcuts</h2>
-    <p>Chrome assigns a shortcut only when the keys are free, and never lets an extension take <kbd class="mod-t"></kbd> itself. Change any of these on Chrome's shortcuts page.</p>
+    <p>Dia keeps <kbd class="mod-t"></kbd> and its own command bar; Arcadia does not touch them. The browser assigns a shortcut only when the keys are free.</p>
     <table id="keys"><tbody></tbody></table>
-    <button type="button" data-open="chrome://extensions/shortcuts">Edit shortcuts in Chrome</button>
+    <button type="button" data-open="chrome://extensions/shortcuts">Edit shortcuts</button>
   </section>
 
   <section>
     <h2>Privacy</h2>
     <p>Arcadia makes no network requests. Its pages are locked by a content-security policy that blocks every outside connection, so it cannot send anything anywhere.</p>
-    <p>It keeps no record of what you browse: no visited pages, no clicks, no history of its own. The only things saved are what you create here, in this Chrome profile: your spaces, the tabs you pin and these settings.</p>
+    <p>It keeps no record of what you browse: no visited pages, no clicks, no history of its own. The only things saved are your spaces and these settings, in this profile.</p>
     <div class="buttons">
       <button type="button" id="export">Export to a file</button>
       <button type="button" id="import">Import from a file</button>

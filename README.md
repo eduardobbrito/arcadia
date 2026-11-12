@@ -1,127 +1,101 @@
-# Arcadia
+# Arcadia for Dia
 
-An Arc-style sidebar for Google Chrome: spaces, pinned tabs, a swipe between
-spaces, a command bar on new tab, mini windows and one-key link copying. Named
-for the two browsers that inspired it.
+The Arc features Dia does not have, as an extension: spaces inside a profile,
+mini windows, cleaned link copying and Clear. Named for the two browsers that
+inspired it.
 
-Arcadia is a plain Manifest V3 extension: no build step, no dependencies, no
-network access.
+This is the `dia` branch. `main` is the Chrome version and `firefox` the
+Firefox version. Dia already has a sidebar, a command bar on ⌘T and profiles
+with separate logins, so this build draws no sidebar, leaves ⌘T alone and does
+not try to separate logins.
 
-## Install or update
+> **Status: not yet run in Dia.** Dia is a Mac app and could not be run where
+> this was written. The build was exercised in Chromium, which Dia is based on,
+> with both ways of keeping spaces. What Dia itself does with tab groups, popup
+> windows and shortcuts from an extension is unverified.
 
-1. Unzip the folder somewhere permanent (Chrome loads it from that location).
-2. Open `chrome://extensions` and turn on **Developer mode** (top right).
-3. Click **Load unpacked** and choose the `arcadia` folder.
-   To update, replace the folder's contents and click the reload arrow on the
-   Arcadia card. Your spaces and pinned tabs are kept.
-4. Click the Arcadia icon in the toolbar to open the sidebar, and set *Side
-   panel position* to **left** in `chrome://settings/appearance`.
-5. **Turn off Chrome's vertical tabs** so there is one sidebar: right-click
-   Chrome's tab strip and choose **Show Tabs Horizontally**.
+## Install
 
-Repeat in each Chrome profile where you want it.
+1. Unzip the folder somewhere permanent.
+2. In Dia, open the extensions page (`chrome://extensions` works in
+   Chromium-based browsers) and turn on **Developer mode**.
+3. Click **Load unpacked** and choose this folder.
+4. Pin Arcadia to the toolbar.
 
-### Why step 5 is needed
+Repeat in each Dia profile where you want spaces.
 
-Chrome does not let an extension draw inside its vertical tab strip, restyle
-it, or hide it. The only sidebar an extension can render is Chrome's side
-panel, so that is where Arcadia's sidebar lives. With Chrome's vertical tabs
-also on you would see two sidebars.
-
-Chrome's horizontal tab strip stays along the top; it cannot be removed either.
-In full screen it hides if you turn off *View › Always Show Toolbar in Full
-Screen*; then switch on *Back, forward and address in the sidebar* in Arcadia's
-settings.
-
-## What it does
+## What it adds
 
 | | |
 |---|---|
-| **Sidebar** | In Chrome's side panel, washed in the current space's colour: tiles for tabs pinned in every space, the space's own pinned tabs, then its open tabs. Drag to reorder, pin or unpin; right-click for more. |
-| **Spaces** | Each space has its own pinned tabs, open tabs, colour and icon. Switch with a two-finger swipe across the sidebar, the icons at the bottom, a shortcut, or the command bar. |
-| **New tabs land in the current space** | Any tab you open joins the space you are in. |
-| **Pinned tabs** | Drag a tab above the line to pin it to the space. Closing a pinned tab only puts it to sleep; it stays in the list and wakes on click. If it wanders off, hover for **Back**. |
-| **Pinned in every space** | Drag a tab to the tiles at the top, or right-click › *Keep pinned in every space*. |
-| **Command bar on ⌘T** | A floating bar over the page: type an address, a search, the name of an open tab, a pinned tab, or a command. ⌘↩ opens in a background tab. It also does sums. |
-| **⇧⌘C copies the link** | With tracking parameters removed, and a small confirmation. |
-| **Mini window** | A small window with one page and no tab strip. Shift-click a link, right-click › *Open link in mini window*, or press the shortcut. ⌘O inside it moves the page to your main window. |
-| **Clear** | Closes the open tabs you are not using. The tab in front and tabs playing sound stay. |
-| **Recently closed** | The clock at the bottom lists Chrome's own recently-closed tabs. |
+| **Spaces inside a profile** | Several sets of tabs that share one profile's logins: Work and Reading, say, both signed in as you. Switch from the spaces menu (toolbar icon, keys 1 to 9), with shortcuts, or from the palette. |
+| **New tabs stay in their space** | A tab you open joins the space you are in. |
+| **Move a tab to another space** | From the palette: "Move tab to space …". |
+| **Mini window** | A small window with one page and no sidebar (Arc's Little Arc). Shift-click a link, right-click › *Open link in mini window*, or press the shortcut. ⌘O inside it moves the page to your main window. |
+| **Cleaned links** | Copying the page link leaves out tracking parameters such as `utm_source` and `fbclid`. |
+| **Clear** | Closes the current space's tabs you are not using. The tab in front, pinned tabs and tabs playing sound stay. |
+| **Palette** | ⌥⇧K opens Arcadia's own small command palette for the above, without touching Dia's ⌘T. |
+
+For separate logins, use Dia's own profiles. An extension cannot separate
+logins in a Chromium-based browser.
+
+## Two ways of keeping spaces
+
+Arcadia picks one automatically; you can force either in settings.
+
+- **Tab groups** (tried first). Everything stays in one window. Each space is a
+  group in Dia's sidebar: the one you are in is open, the others are folded.
+  Opening a folded group switches to that space.
+- **Separate windows** (the fallback). Each space is its own Dia window, and
+  switching brings that window forward. Moving a tab between spaces moves it
+  between windows without reloading. Closing a space's window keeps the space;
+  going to it again opens a new window.
+
+The fallback exists because Dia has, at least in the past, not let extensions
+manage tab groups. If Dia refuses, the spaces menu says so and Arcadia switches
+to windows by itself.
+
+Pinned tabs are Dia's own and are never touched: they belong to the profile,
+not to a space.
 
 ## Shortcuts
 
-| Action | Default | Notes |
-|---|---|---|
-| Command bar | ⌘T | Works out of the box (see below) |
-| Copy link | ⇧⌘C | Works on web pages out of the box |
-| Show or hide the sidebar | ⌥⇧S | |
-| Command bar, without opening a tab | ⌥⇧K | |
-| New mini window | ⌥⇧M | |
-| Move mini window page to main window | ⌘O | Inside a mini window |
-| Next/previous space, pin tab, edit current address, pop tab out, copy as Markdown | none | Assign at `chrome://extensions/shortcuts` |
+| Action | Default |
+|---|---|
+| Spaces menu | ⌥⇧S |
+| Arcadia palette | ⌥⇧K |
+| New mini window | ⌥⇧M |
+| Copy cleaned link | ⇧⌘C on web pages, if the page receives the key |
+| Move mini window page to main window | ⌘O, inside a mini window |
+| Next/previous space, clear unused tabs, pop tab out, copy as Markdown | none; assign them on the browser's extension shortcuts page |
 
-Chrome decides which defaults it accepts. The settings page shows what is
-actually assigned.
-
-## How it works, and what Chrome will not allow
-
-**Spaces are Chrome tab groups.** One group per space per window, and switching
-folds the others away, so Chrome's own tab strip stays in step with the
-sidebar. With a single space, no groups are created.
-
-**Pinned tabs are Chrome pinned tabs that move with the space.** When you leave
-a space, its pinned tabs are unpinned and tucked into its folded group; when
-you return they are pinned again. Nothing reloads.
-
-**Spaces share logins.** Chrome has no way for an extension to separate cookies
-inside one profile. For separate logins, use separate Chrome profiles and load
-Arcadia in each. Switching Chrome profiles from within Arcadia is not possible
-from an extension alone; it needs a small helper app on the Mac.
-
-**⌘T belongs to Chrome.** An extension cannot take the key. Arcadia instead
-notices Chrome's new tab the moment it appears, closes it, and shows the
-command bar over the page you were on. On pages Chrome protects (`chrome://`
-pages, the Web Store) the bar opens as a full tab instead. Turn this off in
-settings to get Chrome's normal new tab back.
-
-**The side panel has a minimum width** set by Chrome, wider than Arc's sidebar,
-and Chrome adds a small title row above it.
-
-**Links from other apps** can open in a mini window (off by default). Chrome
-does not say where a tab came from, so this is a guess based on window focus.
-
-**Prefer Chrome's vertical tabs?** In settings, set *Sidebar* to *Chrome's
-vertical tabs*. Spaces then show as groups in Chrome's strip, pinned tabs as
-its tiles, and the toolbar icon opens a spaces menu. Chrome's strip cannot
-show Arcadia's design or take the swipe gesture.
+The browser decides which defaults it accepts. The settings page shows what is
+actually assigned. If Dia handles ⇧⌘C itself, give "Copy the current page
+link" a different shortcut to get the cleaned version.
 
 ## Privacy
 
 - **No network.** Arcadia never makes a request. Its pages run under a
-  content-security policy with `connect-src 'none'` and images limited to the
-  extension itself, so they cannot reach anything outside.
+  content-security policy with `connect-src 'none'`.
 - **No record of browsing.** No visited pages, clicks or events are logged or
   stored.
-- **What is stored**, in this Chrome profile only (`chrome.storage.local`):
-  your spaces, the tabs you pin (title and address at the moment you pinned
-  them), your settings, and which space was last open. That is all.
-- **In memory only** until Chrome quits: which tab belongs to which pinned
-  entry, by numeric id. No addresses.
-- **History and bookmarks** are read locally while you type in the command bar.
+- **What is stored**, in this profile only (`chrome.storage.local`): your
+  spaces, your settings, which space was last open, and the order of the
+  spaces' windows (so they can be matched again after a restart).
+- **In memory only** until the browser quits: tab, group and window ids. No
+  addresses.
+- **History and bookmarks** are read locally while you type in the palette.
   Turn that off in settings.
-- The page script reacts to two things: the copy-link key and shift-clicks on
-  links. It reads nothing else from pages.
 
 ## Files
 
 ```
 manifest.json
-background.js        state, spaces, tab groups, pinned tabs, command bar results, mini windows
-sidepanel/           the sidebar
-bar/                 the command bar (overlay, full tab, mini window, inside the sidebar)
+background.js        spaces (groups or windows), mini windows, link copying, palette results
+popup/               the spaces menu
+bar/                 the palette (overlay, full tab, mini window)
 lib/                 colours, icons, helpers, the shared space form
 content/content.js   copy-link key, shift-click, overlay host, toasts
 offscreen/           clipboard helper
 options/             settings and setup
-popup/               the spaces menu, used with Chrome's vertical tabs
 ```

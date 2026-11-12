@@ -202,6 +202,13 @@
           showMiniPill();
           sendResponse({ ok: true });
           break;
+        case 'arcadia:copy':
+          // Used when the browser has no hidden page for the service worker to copy through.
+          navigator.clipboard.writeText(String(msg.text ?? '')).then(
+            () => sendResponse({ ok: true }),
+            () => sendResponse({ ok: false }),
+          );
+          return true;
       }
     });
   }

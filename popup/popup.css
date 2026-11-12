@@ -1,8 +1,9 @@
 /* The spaces menu that opens from the toolbar icon. Colour tokens: lib/theme.css. */
 
+html { width: 320px; }
+
 * { box-sizing: border-box; }
 
-html { width: 300px; }
 
 body {
   margin: 0;
@@ -98,5 +99,6 @@ footer button {
   font-size: 12.5px;
 }
 footer button:hover { background: var(--hover); color: var(--ink); }
+footer button:disabled { opacity: 0.5; pointer-events: none; }
 
 #editor { padding: 8px 6px 6px; }

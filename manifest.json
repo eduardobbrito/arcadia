@@ -1,17 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "Arcadia: spaces, sidebar and command bar",
+  "name": "Arcadia for Dia: spaces and mini windows",
   "short_name": "Arcadia",
   "version": "0.1.0",
-  "description": "An Arc-style sidebar for Chrome: spaces, pinned tabs, swipe between spaces, a command bar on new tab, mini windows and one-key link copying. Private: no network, no tracking.",
+  "description": "What Dia lacks from Arc: spaces inside a profile, mini windows, cleaned link copying and Clear. Uses Dia's own sidebar. Private: no network, no tracking.",
   "minimum_chrome_version": "121",
   "permissions": [
     "tabs",
     "tabGroups",
-    "sidePanel",
     "storage",
     "scripting",
-    "sessions",
     "history",
     "bookmarks",
     "favicon",
@@ -31,16 +29,14 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "side_panel": {
-    "default_path": "sidepanel/sidepanel.html"
-  },
   "action": {
-    "default_title": "Show or hide the Arcadia sidebar",
+    "default_title": "Arcadia spaces",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
       "48": "icons/icon48.png"
-    }
+    },
+    "default_popup": "popup/popup.html"
   },
   "options_ui": {
     "page": "options/options.html",
@@ -79,13 +75,13 @@
       "suggested_key": {
         "default": "Alt+Shift+S"
       },
-      "description": "Show or hide the sidebar"
+      "description": "Open the spaces menu"
     },
     "command-bar": {
       "suggested_key": {
         "default": "Alt+Shift+K"
       },
-      "description": "Open the command bar"
+      "description": "Open the Arcadia palette"
     },
     "copy-url": {
       "suggested_key": {
@@ -100,9 +96,6 @@
       },
       "description": "Open a mini window"
     },
-    "command-bar-current": {
-      "description": "Edit the current address in the command bar"
-    },
     "copy-url-markdown": {
       "description": "Copy the current page link as Markdown"
     },
@@ -112,11 +105,11 @@
     "previous-space": {
       "description": "Go to the previous space"
     },
-    "toggle-pin": {
-      "description": "Pin or unpin the current tab"
-    },
     "pop-out": {
       "description": "Open the current tab in a mini window"
+    },
+    "clear-tabs": {
+      "description": "Clear unused tabs in this space"
     }
   }
 }

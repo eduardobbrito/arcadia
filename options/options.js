@@ -37,14 +37,18 @@ const body = document.querySelector('#keys tbody');
 for (const c of commands) {
   const tr = document.createElement('tr');
   const what = document.createElement('td');
-  what.textContent = c.description || (c.name === '_execute_action' ? 'Show or hide the sidebar' : c.name);
+  what.textContent = c.description || (c.name === '_execute_action' ? 'Open the spaces menu' : c.name);
   const keys = document.createElement('td');
   keys.textContent = pretty(c.shortcut);
   tr.append(what, keys);
   body.append(tr);
 }
-const toggle = commands.find((c) => c.name === '_execute_action');
-for (const el of document.querySelectorAll('[data-cmd="_execute_action"]')) el.textContent = toggle?.shortcut ? pretty(toggle.shortcut) : isMac ? '⌥⇧S' : 'Alt+Shift+S';
+// Show each shortcut as it is really assigned, or the default it asks for.
+const wanted = { _execute_action: 'Alt+Shift+S', 'mini-window': 'Alt+Shift+M' };
+for (const el of document.querySelectorAll('[data-cmd]')) {
+  const cmd = commands.find((c) => c.name === el.dataset.cmd);
+  el.textContent = pretty(cmd?.shortcut || wanted[el.dataset.cmd] || '');
+}
 
 for (const btn of document.querySelectorAll('[data-open]')) {
   btn.addEventListener('click', () => chrome.tabs.create({ url: btn.dataset.open }));
@@ -61,7 +65,7 @@ document.getElementById('export').addEventListener('click', async () => {
   a.download = `arcadia-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
-  say('Exported your spaces, pinned tabs, favorites and settings.');
+  say('Exported your spaces and settings.');
 });
 
 const file = document.getElementById('file');
@@ -76,7 +80,7 @@ file.addEventListener('change', async () => {
   } catch {
     return say('That file is not valid JSON. Choose a file exported from Arcadia.');
   }
-  if (!confirm('Importing replaces the spaces, pinned tabs and favorites in this Chrome profile. Open tabs stay open. Continue?')) return;
+  if (!confirm('Importing replaces the spaces in this profile. Open tabs stay open. Continue?')) return;
   const r = await send('data:import', { data });
   say(r?.ok ? 'Imported.' : r?.error || 'Import failed.');
 });

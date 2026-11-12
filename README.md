@@ -29,13 +29,28 @@ Firefox only installs unsigned extensions temporarily.
    `about:addons`, choose Arcadia › Permissions, and turn on *Access your data
    for all websites*.
 
-**To keep it**, either:
+Every restart removes a temporary add-on, and any Arcadia page left open then
+shows up blank. Load it again with steps 1 and 2. Installing `userChrome.css`
+(below) needs a restart, so expect to do this once right after.
 
-- sign it with Mozilla (free, and it can stay unlisted): create API keys at
-  addons.mozilla.org, then run `npx web-ext sign --channel=unlisted` in this
-  folder and install the `.xpi` it produces; or
-- use Firefox Developer Edition, set `xpinstall.signatures.required` to `false`
-  in `about:config`, zip this folder and install it from `about:addons`.
+**To keep it** across restarts, package it and install the package. The package
+is a zip with `manifest.json` at its top level:
+
+```bash
+git archive --format=zip -o ../arcadia-firefox.xpi firefox
+```
+
+Then either:
+
+- **Have Mozilla sign it** (free, and it stays unlisted). Sign in at
+  addons.mozilla.org/developers, choose *Submit a New Add-on* › *On your own*,
+  and upload the package. Download the signed `.xpi` it gives back, then in
+  `about:addons` click the gear › *Install Add-on From File…*. This works in
+  ordinary Firefox.
+- **Or skip signing** in Firefox Developer Edition, Nightly or ESR: set
+  `xpinstall.signatures.required` to `false` in `about:config`, then install
+  the package from `about:addons` the same way. Ordinary Firefox ignores that
+  setting.
 
 Requires Firefox 128 or later.
 

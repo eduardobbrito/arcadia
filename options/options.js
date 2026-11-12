@@ -37,18 +37,20 @@ const body = document.querySelector('#keys tbody');
 for (const c of commands) {
   const tr = document.createElement('tr');
   const what = document.createElement('td');
-  what.textContent = c.description || (c.name === '_execute_action' ? 'Show or hide the sidebar' : c.name);
+  what.textContent = c.description || (c.name === '_execute_sidebar_action' ? 'Show or hide the sidebar' : c.name);
   const keys = document.createElement('td');
   keys.textContent = pretty(c.shortcut);
   tr.append(what, keys);
   body.append(tr);
 }
-const toggle = commands.find((c) => c.name === '_execute_action');
-for (const el of document.querySelectorAll('[data-cmd="_execute_action"]')) el.textContent = toggle?.shortcut ? pretty(toggle.shortcut) : isMac ? '⌥⇧S' : 'Alt+Shift+S';
+const toggle = commands.find((c) => c.name === '_execute_sidebar_action');
+for (const el of document.querySelectorAll('[data-cmd="_execute_sidebar_action"]')) el.textContent = toggle?.shortcut ? pretty(toggle.shortcut) : isMac ? '⌥⇧S' : 'Alt+Shift+S';
 
-for (const btn of document.querySelectorAll('[data-open]')) {
-  btn.addEventListener('click', () => chrome.tabs.create({ url: btn.dataset.open }));
-}
+// Newer Firefox can open its shortcut editor directly; older ones need the manual route.
+document.getElementById('edit-keys').addEventListener('click', () => {
+  if (chrome.commands.openShortcutSettings) chrome.commands.openShortcutSettings();
+  else document.getElementById('keys-hint').hidden = false;
+});
 
 // ---- export and import
 

@@ -3,21 +3,30 @@
   "name": "Arcadia: spaces, sidebar and command bar",
   "short_name": "Arcadia",
   "version": "0.1.0",
-  "description": "An Arc-style sidebar for Chrome: spaces, pinned tabs, swipe between spaces, a command bar on new tab, mini windows and one-key link copying. Private: no network, no tracking.",
-  "minimum_chrome_version": "121",
+  "description": "An Arc-style sidebar for Firefox: spaces with their own logins (containers), pinned tabs, swipe between spaces, a command bar on new tab, mini windows and one-key link copying. Private: no network, no tracking.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "arcadia@eduardobbrito",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
   "permissions": [
     "tabs",
-    "tabGroups",
-    "sidePanel",
+    "tabHide",
+    "contextualIdentities",
+    "cookies",
     "storage",
     "scripting",
     "sessions",
     "history",
     "bookmarks",
-    "favicon",
     "search",
     "contextMenus",
-    "offscreen",
     "clipboardWrite",
     "alarms"
   ],
@@ -28,11 +37,19 @@
     "extension_pages": "default-src 'self'; script-src 'self'; object-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
   },
   "background": {
-    "service_worker": "background.js",
+    "scripts": [
+      "background.js"
+    ],
     "type": "module"
   },
-  "side_panel": {
-    "default_path": "sidepanel/sidepanel.html"
+  "sidebar_action": {
+    "default_title": "Arcadia",
+    "default_panel": "sidepanel/sidepanel.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    },
+    "open_at_install": true
   },
   "action": {
     "default_title": "Show or hide the Arcadia sidebar",
@@ -75,7 +92,7 @@
     }
   ],
   "commands": {
-    "_execute_action": {
+    "_execute_sidebar_action": {
       "suggested_key": {
         "default": "Alt+Shift+S"
       },

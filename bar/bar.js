@@ -1,10 +1,6 @@
 // The command bar widget. bar.html mounts it as a page; the sidebar mounts it inline.
 
-import { ICON, iconFor, cachedIcon, send, tint } from '../lib/shared.js';
-
-const GLOBE = `data:image/svg+xml,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#8a8f98" stroke-width="1.4"><circle cx="8" cy="8" r="5.500"/><path d="M2.500 8h11M8 2.500c2 1.700 2 9.300 0 11M8 2.500c-2 1.700-2 9.300 0 11"/></svg>',
-)}`;
+import { ICON, iconFor, letterIcon, send, tint } from '../lib/shared.js';
 
 export function mountBar(root, { mode = 'new', windowId = null, token = null, compact = false, onClose = () => {}, onReady = () => {} } = {}) {
   root.classList.add('ab-root');
@@ -50,12 +46,11 @@ export function mountBar(root, { mode = 'new', windowId = null, token = null, co
         } else {
           const img = document.createElement('img');
           img.alt = '';
-          const fallbacks = [cachedIcon(it.url), GLOBE].filter(Boolean);
           img.onerror = () => {
-            const next = fallbacks.shift();
-            if (next) img.src = next;
+            img.onerror = null;
+            img.src = letterIcon(it.url);
           };
-          img.src = iconFor(it.url, it.favIconUrl) || fallbacks.pop();
+          img.src = iconFor(it.icon, it.url);
           icon.append(img);
         }
         const text = document.createElement('span');

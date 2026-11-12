@@ -1,85 +1,98 @@
-// Arcadia service worker.
+// Arcadia background script (Firefox).
 //
-// Owns all state. Spaces are Chrome tab groups: one group per space per window, and
-// switching a space collapses the others. Pinned tabs are Chrome pinned tabs that
-// follow the space: the current space's are pinned, other spaces' wait inside their
-// group. The sidebar is Arcadia's panel in Chrome's side panel (sidepanel/), or, if
-// the user prefers, Chrome's own vertical tab strip with a spaces menu (popup/).
-// Pages talk to this file through chrome.runtime messages and re-read their view
-// when it broadcasts "arcadia:changed".
+// Owns all state. Every space after the first is a Firefox container, so spaces keep
+// separate logins. A tab belongs to the space that was open when it appeared; tabs of
+// other spaces are hidden from Firefox's own tab strip and from Ctrl+Tab. The sidebar
+// (sidepanel/) is Arcadia's panel in Firefox's sidebar. Pages talk to this file
+// through runtime messages and re-read their view when it broadcasts "arcadia:changed".
 //
 // Privacy: this file makes no network requests and keeps no record of browsing.
-// Disk (chrome.storage.local) holds only what the user creates: spaces, pinned
-// entries, favorites, settings and which space was last open. Tab and group ids live in session memory.
+// Disk (storage.local) holds only what the user creates: spaces, pinned entries
+// (with their site icon), settings and which space was last open. Tab ids and the
+// icons of open tabs live in session memory.
 
 import { COLOR_NAMES, hostOf } from './lib/shared.js';
 
 const EXT = chrome.runtime.getURL('');
 const BAR_URL = chrome.runtime.getURL('bar/bar.html');
-const NTP_RE = /^(chrome|edge|brave|vivaldi):\/\/(newtab|new-tab-page)/i;
+const START_URL = `${BAR_URL}?mode=tab`;
+const NTP_RE = /^about:(newtab|home)\b/i;
+const DEFAULT_STORE = 'firefox-default';
+const TAB_KEY = 'arcadia-space';
 const BOOT_GRACE_MS = 4000;
 
+// Arcadia's colour names, as Firefox container colours.
+const FF_COLOR = { grey: 'toolbar', blue: 'blue', red: 'red', yellow: 'yellow', green: 'green', pink: 'pink', purple: 'purple', cyan: 'turquoise', orange: 'orange' };
+// Firefox containers take one of a fixed set of icons; pick the nearest to the space's emoji.
+const FF_ICON = { '💼': 'briefcase', '💰': 'dollar', '🛒': 'cart', '✈️': 'vacation', '🌿': 'tree', '🏠': 'fence', '🎮': 'chill', '🎧': 'chill', '📚': 'fruit', '❤️': 'pet', '⭐': 'gift', '🧠': 'fingerprint' };
+
 const DEFAULT_SETTINGS = {
-  newTabOpensBar: true, // swap Chrome's new tab for the command bar
+  newTabOpensBar: true, // swap Firefox's new tab for the command bar
   copyUrlShortcut: true, // ⇧⌘C on pages copies the link
   shiftClickMini: true, // shift-click a link opens it in a mini window
   cleanLinks: true, // copied links drop tracking parameters
-  searchHistory: true, // the command bar looks in Chrome's history and bookmarks (read only)
+  searchHistory: true, // the command bar looks in Firefox's history and bookmarks (read only)
+  keepInSpace: true, // a tab opened outside Arcadia is reopened in the current space's container
   externalToMini: false, // links from other apps open in a mini window (experimental)
-  collapseOtherSpaces: true,
-  pinsPerSpace: true, // a tab pinned in Chrome belongs to the space it was pinned in
-  sidebar: 'arcadia', // 'arcadia': Arcadia's sidebar in Chrome's side panel; 'chrome': Chrome's vertical tabs
-  keepPinned: true, // with Chrome's vertical tabs: a closed pinned tab reopens asleep
-  panelNav: false, // back/forward/address row at the top of Arcadia's sidebar
   archiveAfterHours: 0, // 0 = never
   miniWidth: 980,
   miniHeight: 700,
+  panelNav: false, // back/forward/address row at the top of the sidebar
 };
 
 let S = null; // persistent: spaces, pinned, favorites, settings
-let T = null; // per browser session: group/tab links
+let T = null; // per browser session: which tab is in which space, and tab ids of pinned entries
 let selfUntil = 0; // tabs created before this timestamp are ours
+const own = new Set(); // ids of tabs Arcadia opened itself
+const icons = new Map(); // tabId -> { site, data }: site icons reported by the page script
 
 const uid = () => crypto.randomUUID().replace(/-/g, '').slice(0, 12);
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const getTab = (id) => chrome.tabs.get(id).catch(() => null);
 const multi = () => S.spaces.length > 1;
-// True when Arcadia's own sidebar is in use; it can show a pinned tab that has no tab open.
-const panelMode = () => S.settings.sidebar !== 'chrome';
 const spaceById = (id) => S.spaces.find((s) => s.id === id) || null;
+const storeOf = (tab) => tab?.cookieStoreId || DEFAULT_STORE;
+const isWeb = (url) => /^https?:/i.test(url || '');
 
 // ---------------------------------------------------------------- state
 
 const ready = (async () => {
   const l = await chrome.storage.local.get(['spaces', 'pinned', 'favorites', 'settings', 'lastSpace']);
-  chrome.storage.local.remove('archive').catch(() => {});
   const fresh = !Array.isArray(l.spaces) || !l.spaces.length;
   S = {
-    spaces: fresh ? [{ id: uid(), name: 'Personal', emoji: '🌿', color: 'blue' }] : l.spaces,
+    // The first space uses Firefox's ordinary cookie jar, so existing logins keep working.
+    spaces: fresh ? [{ id: uid(), name: 'Personal', emoji: '🌿', color: 'blue', store: null, isolated: false }] : l.spaces,
     pinned: l.pinned || {},
     favorites: l.favorites || [],
     lastSpace: l.lastSpace || null,
     settings: { ...DEFAULT_SETTINGS, ...Object.fromEntries(Object.entries(l.settings || {}).filter(([k]) => k in DEFAULT_SETTINGS)) },
   };
   if (fresh || !l.settings) await chrome.storage.local.set({ spaces: S.spaces, settings: S.settings });
-  const s = await chrome.storage.session.get('T');
-  T = s.T || {
+  const all = await chrome.storage.session.get(null);
+  T = all.T || {
     boot: Date.now(),
-    groupSpace: {}, // groupId -> spaceId
+    tabSpace: {}, // tabId -> spaceId
+    fresh: {}, // tabId -> true while a new tab has not shown its first web address yet
     activeSpace: {}, // windowId -> spaceId
     lastTab: {}, // `${windowId}:${spaceId}` -> tabId
     live: {}, // windowId -> { itemId: tabId } for pinned entries and favorites
     mini: {}, // windowId -> true
     hist: {}, // windowId -> recently active tab ids
     relinked: {},
-    woke: {}, // itemId -> recent times a closed pinned tab was reopened
-    born: {}, // tabId -> the space that was open when the tab was created
     tokens: {}, // one-time tokens for the in-page command bar
-    docs: {}, // documentId -> tabId for trusted command bar frames
+    frames: {}, // trusted command bar frames -> tabId
     lastNormal: null,
     unfocused: false,
     focusGainAt: 0,
   };
+  for (const [k, v] of Object.entries(all)) if (k.startsWith('icon:')) icons.set(Number(k.slice(5)), v);
+  if (!all.T) {
+    // A fresh browser session: restored tabs carry the space they were in.
+    for (const t of await chrome.tabs.query({})) {
+      const sid = await chrome.sessions.getTabValue(t.id, TAB_KEY).catch(() => null);
+      if (spaceById(sid)) T.tabSpace[t.id] = sid;
+    }
+  }
 })();
 
 const saveS = (...keys) => chrome.storage.local.set(Object.fromEntries(keys.map((k) => [k, S[k]])));
@@ -131,6 +144,104 @@ function scheduleReconcile(windowId, delay = 60) {
   );
 }
 
+// ---------------------------------------------------------------- tabs and their spaces
+
+function assign(tabId, sid) {
+  if (T.tabSpace[tabId] === sid) return;
+  T.tabSpace[tabId] = sid;
+  // Firefox keeps this with the tab, so it survives a restart.
+  chrome.sessions.setTabValue(tabId, TAB_KEY, sid).catch(() => {});
+}
+
+function spaceOfTab(tab) {
+  const sid = T.tabSpace[tab.id];
+  if (spaceById(sid)) return sid;
+  // Not seen before: its container says which space, else the space with no container.
+  const store = storeOf(tab);
+  const sp = S.spaces.find((s) => (s.store || DEFAULT_STORE) === store) || S.spaces[0];
+  assign(tab.id, sp.id);
+  return sp.id;
+}
+
+function rememberSpace(sid) {
+  if (S.lastSpace === sid) return;
+  S.lastSpace = sid;
+  chrome.storage.local.set({ lastSpace: sid }).catch(() => {});
+}
+
+// An icon is tied to its site by a short hash, so no site name is kept with it.
+function siteTag(url) {
+  let h = 2166136261;
+  for (const c of hostOf(url)) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  return (h >>> 0).toString(36);
+}
+
+function iconOf(tab) {
+  const i = icons.get(tab.id);
+  if (i && i.site === siteTag(tab.url)) return i.data;
+  return (tab.favIconUrl || '').startsWith('data:image/') ? tab.favIconUrl : '';
+}
+
+// Gives a space its Firefox container: an unused one with the same name, or a new one.
+async function ensureStore(sp) {
+  if (sp.store || !sp.isolated || !chrome.contextualIdentities) return sp.store || null;
+  try {
+    const used = new Set(S.spaces.map((s) => s.store).filter(Boolean));
+    const same = (await chrome.contextualIdentities.query({ name: sp.name })).find((c) => !used.has(c.cookieStoreId));
+    const c = same || (await chrome.contextualIdentities.create({ name: sp.name, color: FF_COLOR[sp.color] || 'blue', icon: FF_ICON[sp.emoji] || 'circle' }));
+    sp.store = c.cookieStoreId;
+    await saveS('spaces');
+  } catch {
+    // Containers are switched off in Firefox. The space still works, with shared logins.
+  }
+  return sp.store || null;
+}
+
+// All of Arcadia's own tab opening goes through here, so the tab lands in the right
+// space and, for web pages, in that space's container.
+async function createTab(props, sid = null) {
+  selfUntil = Date.now() + 1500;
+  const sp = spaceById(sid) || spaceById(T.activeSpace[props.windowId]) || null;
+  const p = { ...props };
+  if (sp && !p.cookieStoreId && (isWeb(p.url) || p.url === 'about:blank')) {
+    const store = await ensureStore(sp);
+    if (store) p.cookieStoreId = store;
+  }
+  let tab;
+  try {
+    tab = await chrome.tabs.create(p);
+  } catch (e) {
+    if (!p.cookieStoreId) throw e;
+    // The container was removed in Firefox's settings: make it again and retry once.
+    delete p.cookieStoreId;
+    if (sp && sp.store) {
+      sp.store = null;
+      const store = await ensureStore(sp);
+      if (store) p.cookieStoreId = store;
+    }
+    tab = await chrome.tabs.create(p);
+  }
+  own.add(tab.id);
+  if ((p.url || '').startsWith(BAR_URL)) T.fresh[tab.id] = true;
+  if (sp) assign(tab.id, sp.id);
+  return tab;
+}
+
+// A tab that opened outside Arcadia (a bookmark, a link from another app, the address
+// bar of a blank tab) starts in Firefox's default container. If its space has its own
+// container, reopen it there. Returns the tab that should be used from now on.
+async function settleContainer(tab) {
+  if (!isWeb(tab.url)) return tab;
+  delete T.fresh[tab.id];
+  const sp = spaceById(T.tabSpace[tab.id]);
+  if (!S.settings.keepInSpace || !sp?.isolated || storeOf(tab) !== DEFAULT_STORE || tab.pinned || T.mini[tab.windowId]) return tab;
+  const store = await ensureStore(sp);
+  if (!store) return tab;
+  const next = await createTab({ windowId: tab.windowId, url: tab.url, index: tab.index, active: tab.active, cookieStoreId: store }, sp.id);
+  await chrome.tabs.remove(tab.id).catch(() => {});
+  return next;
+}
+
 // ---------------------------------------------------------------- links between entries and tabs
 
 const liveMap = (w) => (T.live[w] ||= {});
@@ -141,7 +252,7 @@ function unlinkTab(tabId) {
 
 // Our own pin and unpin calls, so the tabs.onUpdated handler can tell them from the user's.
 const expectPin = new Map();
-// Tabs Chrome just reported as unpinned, until we know whether that was a close.
+// Tabs just reported as unpinned, until we know whether that was a close.
 const pendingUnpin = new Set();
 async function setPinned(tab, pinned) {
   if (!tab || tab.pinned === pinned) return false;
@@ -155,12 +266,6 @@ async function setPinned(tab, pinned) {
   }
 }
 
-function rememberSpace(sid) {
-  if (S.lastSpace === sid) return;
-  S.lastSpace = sid;
-  chrome.storage.local.set({ lastSpace: sid }).catch(() => {});
-}
-
 function findItem(id) {
   let idx = S.favorites.findIndex((f) => f.id === id);
   if (idx >= 0) return { zone: 'favs', spaceId: null, arr: S.favorites, idx, item: S.favorites[idx] };
@@ -172,33 +277,16 @@ function findItem(id) {
   return null;
 }
 
-function spaceOfGroup(group) {
-  const known = T.groupSpace[group.id];
-  if (known && spaceById(known)) return known;
-  if (!multi()) return null;
-  // After a restart group ids change, so fall back to the group title.
-  const sp = S.spaces.find((s) => s.name === group.title);
-  if (sp) {
-    T.groupSpace[group.id] = sp.id;
-    return sp.id;
-  }
-  return null;
-}
-
-function activeSpace(windowId, tabs, groups) {
-  if (!multi()) return (T.activeSpace[windowId] = S.spaces[0].id);
-  const at = tabs?.find((t) => t.active);
-  if (at && at.groupId !== -1) {
-    const g = groups.find((x) => x.id === at.groupId);
-    const sid = g && spaceOfGroup(g);
-    if (sid) return (T.activeSpace[windowId] = sid);
-  }
+function activeSpace(windowId, tabs) {
+  const front = tabs?.find((t) => t.active);
+  if (front && !front.pinned) return (T.activeSpace[windowId] = spaceOfTab(front));
   let sid = T.activeSpace[windowId];
   if (!spaceById(sid)) sid = spaceById(S.lastSpace) ? S.lastSpace : S.spaces[0].id;
   return (T.activeSpace[windowId] = sid);
 }
 
-function relink(windowId, tabs, groups) {
+// After a restart tab ids are new, so pinned entries find their tabs again by address.
+function relink(windowId, tabs) {
   if (T.relinked[windowId]) return;
   if (Date.now() - T.boot > 8000) T.relinked[windowId] = true;
   const map = liveMap(windowId);
@@ -214,18 +302,17 @@ function relink(windowId, tabs, groups) {
       used.add(t.id);
     }
   };
-  const pinnedTabs = tabs.filter((t) => t.pinned);
-  for (const f of S.favorites) claim(f, pinnedTabs);
+  for (const f of S.favorites) claim(f, tabs.filter((t) => t.pinned));
   for (const sp of S.spaces) {
-    const gids = groups.filter((g) => spaceOfGroup(g) === sp.id).map((g) => g.id);
-    const inGroup = tabs.filter((t) => !t.pinned && (!multi() || gids.includes(t.groupId)));
-    for (const p of S.pinned[sp.id] || []) claim(p, [...inGroup, ...pinnedTabs]);
+    const mine = tabs.filter((t) => !t.pinned && spaceOfTab(t) === sp.id);
+    for (const p of S.pinned[sp.id] || []) claim(p, mine);
   }
 }
 
 // ---------------------------------------------------------------- reconcile
 
-// Idempotent: brings one window's tab groups and pinned tabs in line with the spaces.
+// Idempotent: brings one window in line with the spaces. Tabs pinned in Firefox are
+// the "every space" tiles; everything else shows only while its space is open.
 async function reconcile(windowId) {
   let win;
   try {
@@ -234,177 +321,40 @@ async function reconcile(windowId) {
     return;
   }
   if (win.type !== 'normal' || T.mini[windowId]) return;
-  let tabs = await chrome.tabs.query({ windowId });
-  let groups = await chrome.tabGroups.query({ windowId });
-  relink(windowId, tabs, groups);
-  const active = activeSpace(windowId, tabs, groups);
+  const tabs = await chrome.tabs.query({ windowId });
+  relink(windowId, tabs);
+  const active = activeSpace(windowId, tabs);
   const map = liveMap(windowId);
 
-  // A tab pinned in Chrome becomes a pinned entry: of this space, or of every space.
   let added = false;
   for (const t of tabs) {
-    if (!t.pinned || itemOfTab(windowId, t.id)) continue;
-    const url = t.url || t.pendingUrl;
-    if (!url || url.startsWith(BAR_URL)) continue;
-    let it = [...S.favorites, ...(S.pinned[active] || [])].find((x) => map[x.id] == null && x.url === url);
-    if (!it) {
-      it = { id: uid(), title: t.title || hostOf(url) || 'Pinned tab', url };
-      (S.settings.pinsPerSpace ? (S.pinned[active] ||= []) : S.favorites).push(it);
+    if (!t.pinned || itemOfTab(windowId, t.id) || !t.url || t.url.startsWith(BAR_URL)) continue;
+    let f = S.favorites.find((x) => map[x.id] == null && x.url === t.url);
+    if (!f) {
+      f = { id: uid(), title: t.title || hostOf(t.url) || 'Pinned tab', url: t.url, icon: iconOf(t), home: spaceOfTab(t) };
+      S.favorites.push(f);
       added = true;
     }
-    map[it.id] = t.id;
+    map[f.id] = t.id;
   }
-  if (added) await saveS('pinned', 'favorites');
-
-  try {
-    // Pinned tabs follow the space. This space's, and the ones kept everywhere, are
-    // pinned in Chrome; other spaces' wait, unpinned, inside their own group.
-    const byId = new Map(tabs.map((t) => [t.id, t]));
-    const away = new Map();
-    let moved = false;
-    for (const f of S.favorites) {
-      const t = byId.get(map[f.id]);
-      if (t && !t.pinned && !pendingUnpin.has(t.id)) moved = (await setPinned(t, true)) || moved;
-    }
-    for (const sp of S.spaces) {
-      for (const p of S.pinned[sp.id] || []) {
-        const t = byId.get(map[p.id]);
-        if (!t) continue;
-        if (sp.id === active) {
-          if (!t.pinned && !pendingUnpin.has(t.id)) moved = (await setPinned(t, true)) || moved;
-        } else {
-          if (t.pinned) moved = (await setPinned(t, false)) || moved;
-          if (!away.has(sp.id)) away.set(sp.id, []);
-          away.get(sp.id).push(t.id);
-        }
-      }
-    }
-    if (moved) {
-      tabs = await chrome.tabs.query({ windowId });
-      groups = await chrome.tabGroups.query({ windowId });
-    }
-
-    if (!multi()) {
-      // One space needs no groups; undo any we made earlier.
-      for (const g of groups) {
-        if (!T.groupSpace[g.id]) continue;
-        const ids = tabs.filter((t) => t.groupId === g.id).map((t) => t.id);
-        if (ids.length) await chrome.tabs.ungroup(ids);
-        delete T.groupSpace[g.id];
-      }
-    } else {
-      const bySpace = new Map();
-      for (const g of groups) {
-        const sid = spaceOfGroup(g);
-        if (!sid) continue;
-        const sp = spaceById(sid);
-        if (bySpace.has(sid)) {
-          const ids = tabs.filter((t) => t.groupId === g.id).map((t) => t.id);
-          if (ids.length) await chrome.tabs.group({ tabIds: ids, groupId: bySpace.get(sid).id });
-          delete T.groupSpace[g.id];
-          continue;
-        }
-        bySpace.set(sid, g);
-        if (g.title !== sp.name || g.color !== sp.color) {
-          await chrome.tabGroups.update(g.id, { title: sp.name, color: sp.color });
-        }
-      }
-      const groupInto = async (sid, ids) => {
-        const g = bySpace.get(sid);
-        if (g) return chrome.tabs.group({ tabIds: ids, groupId: g.id });
-        const gid = await chrome.tabs.group({ tabIds: ids, createProperties: { windowId } });
-        T.groupSpace[gid] = sid;
-        const sp = spaceById(sid);
-        await chrome.tabGroups.update(gid, { title: sp.name, color: sp.color });
-        bySpace.set(sid, { id: gid, collapsed: false });
-      };
-      const tucked = new Set();
-      for (const [sid, ids] of away) {
-        const g = bySpace.get(sid);
-        const need = [];
-        for (const id of ids) {
-          const t = tabs.find((x) => x.id === id);
-          if (!t || t.pinned) continue;
-          tucked.add(id);
-          if (!g || t.groupId !== g.id) need.push(id);
-        }
-        if (need.length) await groupInto(sid, need);
-      }
-      // A new tab belongs to the space that was open when it appeared, even if the
-      // user has switched space in the moment since.
-      T.born ||= {};
-      const homes = new Map();
-      for (const t of tabs) {
-        if (t.pinned || t.groupId !== -1 || tucked.has(t.id)) continue;
-        const sid = spaceById(T.born[t.id]) && !t.active ? T.born[t.id] : active;
-        if (!homes.has(sid)) homes.set(sid, []);
-        homes.get(sid).push(t.id);
-        delete T.born[t.id];
-      }
-      for (const [sid, ids] of homes) await groupInto(sid, ids);
-      if (S.settings.collapseOtherSpaces) {
-        for (const [sid, g] of bySpace) {
-          const want = sid !== active;
-          if (g.collapsed !== want) await chrome.tabGroups.update(g.id, { collapsed: want }).catch(() => {});
-        }
-      }
-    }
-    await wakeMissing(windowId, active);
-  } catch (e) {
-    // Chrome refuses tab edits while the user drags a tab; try again shortly.
-    if (/dragging|cannot be edited|edited right now/i.test(String(e))) scheduleReconcile(windowId, 400);
-    else throw e;
+  if (added) await saveS('favorites');
+  for (const f of S.favorites) {
+    const t = tabs.find((x) => x.id === map[f.id]);
+    if (t && !t.pinned && !pendingUnpin.has(t.id)) await setPinned(t, true);
   }
+
+  // Only the current space's tabs stay visible to Firefox's tab strip and Ctrl+Tab.
+  const show = [];
+  const hide = [];
+  for (const t of tabs) {
+    if (t.pinned) continue;
+    const mine = spaceOfTab(t) === active;
+    if (mine && t.hidden) show.push(t.id);
+    else if (!mine && !t.hidden && !t.active) hide.push(t.id);
+  }
+  if (show.length) await chrome.tabs.show(show).catch(() => {});
+  if (hide.length) await chrome.tabs.hide(hide).catch(() => {});
   notify(windowId);
-}
-
-// With Chrome's vertical tabs as the sidebar, a pinned entry with no tab anywhere
-// gets one back, asleep; that strip cannot show an entry without a tab. Arcadia's
-// own sidebar can, so there a closed pinned tab simply rests in the list.
-async function wakeMissing(windowId, active) {
-  if (panelMode() || !S.settings.keepPinned || Date.now() - T.boot < 8000) return;
-  const wins = await chrome.windows.getAll({ windowTypes: ['normal'] });
-  const home = wins.some((w) => w.id === T.lastNormal) ? T.lastNormal : wins[0]?.id;
-  if (home !== windowId) return;
-  const liveAnywhere = (id) => Object.values(T.live).some((m) => m[id] != null);
-  const now = Date.now();
-  T.woke ||= {};
-  for (const it of [...S.favorites, ...(S.pinned[active] || [])]) {
-    if (liveAnywhere(it.id) || !/^https?:/.test(it.url)) continue;
-    const recent = (T.woke[it.id] || []).filter((t) => now - t < 30000);
-    if (recent.length >= 3) continue; // something keeps closing it; stop fighting
-    T.woke[it.id] = [...recent, now];
-    const t = await createTab({ windowId, url: it.url, pinned: true, active: false });
-    liveMap(windowId)[it.id] = t.id;
-    sleepSoon(t.id);
-  }
-}
-
-// Lets a background tab load far enough to have its title and icon, then unloads it.
-// (A tab discarded before that shows up blank in the tab strip.)
-const sleepers = new Map();
-function sleepSoon(tabId) {
-  chrome.tabs.update(tabId, { muted: true }).catch(() => {});
-  const go = async () => {
-    sleepers.delete(tabId);
-    const t = await getTab(tabId);
-    if (!t) return;
-    await chrome.tabs.update(tabId, { muted: false }).catch(() => {});
-    if (!t.active && !t.discarded) await chrome.tabs.discard(tabId).catch(() => {});
-  };
-  sleepers.set(tabId, { go, loaded: false, timer: setTimeout(go, 15000) });
-}
-function sleeperProgress(tabId, info) {
-  const sl = sleepers.get(tabId);
-  if (!sl) return;
-  const again = (ms) => {
-    clearTimeout(sl.timer);
-    sl.timer = setTimeout(sl.go, ms);
-  };
-  if (info.status === 'complete' && !sl.loaded) {
-    sl.loaded = true;
-    again(2500);
-  } else if (info.favIconUrl && sl.loaded) again(500);
 }
 
 async function reconcileAll() {
@@ -418,8 +368,8 @@ const slim = (t) =>
   t && {
     id: t.id,
     title: t.title || '',
-    url: t.url || t.pendingUrl || '',
-    favIconUrl: t.favIconUrl || '',
+    url: t.url || '',
+    icon: iconOf(t),
     active: t.active,
     audible: !!t.audible,
     muted: !!t.mutedInfo?.muted,
@@ -428,14 +378,9 @@ const slim = (t) =>
   };
 
 async function getView(windowId) {
-  const [tabs, groups] = await Promise.all([chrome.tabs.query({ windowId }), chrome.tabGroups.query({ windowId })]);
-  const gSpace = new Map();
-  for (const g of groups) {
-    const sid = spaceOfGroup(g);
-    if (sid) gSpace.set(g.id, sid);
-  }
-  const active = activeSpace(windowId, tabs, groups);
-  relink(windowId, tabs, groups);
+  const tabs = await chrome.tabs.query({ windowId });
+  const active = activeSpace(windowId, tabs);
+  relink(windowId, tabs);
   const map = liveMap(windowId);
   const byId = new Map(tabs.map((t) => [t.id, t]));
   const linked = new Set(Object.values(map));
@@ -445,20 +390,15 @@ async function getView(windowId) {
       id: it.id,
       url: it.url,
       title: it.renamed ? it.title : tab?.title || it.title,
+      icon: (tab && iconOf(tab)) || it.icon || '',
       moved: !!tab && !!tab.url && tab.url !== it.url,
       tab: slim(tab),
     };
   };
-  const today = tabs.filter(
-    (t) => !t.pinned && !linked.has(t.id) && (!multi() || !gSpace.has(t.groupId) || gSpace.get(t.groupId) === active),
-  );
-  const activeTab = tabs.find((t) => t.active);
+  const today = tabs.filter((t) => !t.pinned && !linked.has(t.id) && spaceOfTab(t) === active);
   const counts = Object.fromEntries(S.spaces.map((sp) => [sp.id, 0]));
-  for (const t of tabs) {
-    if ((t.url || '').startsWith(BAR_URL)) continue;
-    const sid = !multi() ? active : gSpace.get(t.groupId) || (S.favorites.some((f) => map[f.id] === t.id) ? null : active);
-    if (sid) counts[sid]++;
-  }
+  for (const t of tabs) if (!t.pinned && !(t.url || '').startsWith(BAR_URL)) counts[spaceOfTab(t)]++;
+  const front = tabs.find((t) => t.active);
   return {
     ok: true,
     windowId,
@@ -468,7 +408,7 @@ async function getView(windowId) {
     favorites: S.favorites.map(shape),
     pinned: (S.pinned[active] || []).map(shape),
     today: today.map(slim),
-    current: slim(activeTab),
+    current: slim(front),
     settings: S.settings,
   };
 }
@@ -487,23 +427,19 @@ async function switchSpace(windowId, sid, { noCreate = false } = {}) {
   if (!spaceById(sid)) return;
   T.activeSpace[windowId] = sid;
   rememberSpace(sid);
-  if (multi()) {
-    const tabs = await chrome.tabs.query({ windowId });
-    const groups = await chrome.tabGroups.query({ windowId });
-    const g = groups.find((x) => spaceOfGroup(x) === sid);
-    const inSpace = g ? tabs.filter((t) => t.groupId === g.id) : [];
-    // If the tab in front is already in this space (the user just picked it), keep it.
-    const front = inSpace.find((t) => t.active);
-    const target = front || inSpace.find((t) => t.id === T.lastTab[`${windowId}:${sid}`]) || inSpace[inSpace.length - 1];
-    if (target) {
-      if (g.collapsed) await chrome.tabGroups.update(g.id, { collapsed: false }).catch(() => {});
-      await chrome.tabs.update(target.id, { active: true });
-    } else if (!noCreate) {
-      // A window always shows a tab, so an empty space gets a start page.
-      await createTab({ windowId, url: `${BAR_URL}?mode=tab`, active: true });
-    }
-    await reconcile(windowId);
+  const tabs = await chrome.tabs.query({ windowId });
+  const inSpace = tabs.filter((t) => !t.pinned && spaceOfTab(t) === sid);
+  // If the tab in front is already in this space (the user just picked it), keep it.
+  const front = inSpace.find((t) => t.active);
+  const target = front || inSpace.find((t) => t.id === T.lastTab[`${windowId}:${sid}`]) || inSpace[inSpace.length - 1];
+  if (target) {
+    if (target.hidden) await chrome.tabs.show([target.id]).catch(() => {});
+    if (!target.active) await chrome.tabs.update(target.id, { active: true });
+  } else if (!noCreate) {
+    // A window always shows a tab, so an empty space gets a start page.
+    await createTab({ windowId, url: START_URL, active: true }, sid);
   }
+  await reconcile(windowId);
   notify(windowId);
 }
 
@@ -520,11 +456,12 @@ async function createSpace(windowId, { name, emoji, color }) {
     name: uniqueName(name || 'New space'),
     emoji: (emoji || '').trim().slice(0, 8) || '✨',
     color: COLOR_NAMES.includes(color) ? color : COLOR_NAMES[(S.spaces.length % (COLOR_NAMES.length - 1)) + 1],
+    store: null,
+    isolated: true, // its own Firefox container, so its own logins
   };
-  // Group existing tabs under the current space before the new one takes over.
   S.spaces.push(sp);
   await saveS('spaces');
-  await reconcileAll();
+  await ensureStore(sp);
   if (windowId != null) await switchSpace(windowId, sp.id);
   notify();
   return { ok: true, space: sp };
@@ -537,65 +474,71 @@ async function updateSpace({ id, name, emoji, color }) {
   if (emoji != null) sp.emoji = emoji.trim().slice(0, 8) || sp.emoji;
   if (COLOR_NAMES.includes(color)) sp.color = color;
   await saveS('spaces');
-  await reconcileAll();
+  if (sp.store) {
+    // Keep the container's name and colour in step, so Firefox's own menus match.
+    await chrome.contextualIdentities
+      ?.update(sp.store, { name: sp.name, color: FF_COLOR[sp.color] || 'blue', icon: FF_ICON[sp.emoji] || 'circle' })
+      .catch(() => {});
+  }
   notify();
   return { ok: true };
 }
 
+// The space's open tabs move to its neighbour and keep the container they were opened
+// in. The Firefox container itself, with its logins, is left alone.
 async function deleteSpace(id) {
   const idx = S.spaces.findIndex((s) => s.id === id);
   if (idx < 0) return { ok: false };
   if (S.spaces.length < 2) return { ok: false, error: 'Keep at least one space.' };
-  // Make sure every group is mapped by id before the name disappears.
-  for (const g of await chrome.tabGroups.query({})) spaceOfGroup(g);
   const fallback = S.spaces[idx === 0 ? 1 : idx - 1].id;
+  for (const t of await chrome.tabs.query({})) if (spaceOfTab(t) === id) assign(t.id, fallback);
   S.spaces.splice(idx, 1);
-  // Its pinned tabs stay open as ordinary tabs of the space that takes over.
   for (const p of S.pinned[id] || []) for (const w in T.live) delete T.live[w][p.id];
   delete S.pinned[id];
-  if (S.lastSpace === id) rememberSpace(fallback);
-  for (const gid in T.groupSpace) if (T.groupSpace[gid] === id) T.groupSpace[gid] = fallback;
+  for (const f of S.favorites) if (f.home === id) f.home = fallback;
   for (const w in T.activeSpace) if (T.activeSpace[w] === id) T.activeSpace[w] = fallback;
-  await saveS('spaces', 'pinned');
+  if (S.lastSpace === id) rememberSpace(fallback);
+  await saveS('spaces', 'pinned', 'favorites');
   await reconcileAll();
   notify();
   return { ok: true };
 }
 
+// Moves tabs to another space. A web page has to be reopened to change container,
+// so it reloads and signs in as that space. Returns old tab id -> new tab id.
 async function tabsToSpace(windowId, tabIds, sid) {
-  if (!multi() || !spaceById(sid)) return;
+  const moved = new Map();
+  const dest = spaceById(sid);
+  if (!dest) return moved;
   const tabs = await chrome.tabs.query({ windowId });
-  const groups = await chrome.tabGroups.query({ windowId });
-  const active = activeSpace(windowId, tabs, groups);
-  if (sid === active) return;
-  const moving = tabs.filter((t) => tabIds.includes(t.id) && !t.pinned);
-  if (!moving.length) return;
+  const active = activeSpace(windowId, tabs);
+  const moving = tabs.filter((t) => tabIds.includes(t.id) && !t.pinned && spaceOfTab(t) !== sid);
+  if (!moving.length) return moved;
   const ids = moving.map((t) => t.id);
-  if (moving.some((t) => t.active)) {
+  if (sid !== active && moving.some((t) => t.active)) {
     // Stay in the current space: hand focus to a tab that is not moving.
-    const ag = groups.find((g) => spaceOfGroup(g) === active);
-    const stay = tabs.filter((t) => !ids.includes(t.id) && ((ag && t.groupId === ag.id) || t.pinned));
+    const stay = tabs.filter((t) => !ids.includes(t.id) && (t.pinned || spaceOfTab(t) === active));
     if (stay.length) await chrome.tabs.update(stay[stay.length - 1].id, { active: true });
   }
-  for (const id of ids) unlinkTab(id);
-  const g = groups.find((x) => spaceOfGroup(x) === sid);
-  if (g) {
-    await chrome.tabs.group({ tabIds: ids, groupId: g.id });
-  } else {
-    const gid = await chrome.tabs.group({ tabIds: ids, createProperties: { windowId } });
-    T.groupSpace[gid] = sid;
-    const sp = spaceById(sid);
-    await chrome.tabGroups.update(gid, { title: sp.name, color: sp.color });
+  const store = (await ensureStore(dest)) || DEFAULT_STORE;
+  for (const t of moving) {
+    unlinkTab(t.id);
+    if (isWeb(t.url) && storeOf(t) !== store) {
+      const props = { windowId, url: t.url, index: t.index, active: false };
+      if (store !== DEFAULT_STORE) props.cookieStoreId = store;
+      const next = await createTab(props, sid);
+      await chrome.tabs.remove(t.id).catch(() => {});
+      moved.set(t.id, next.id);
+    } else {
+      assign(t.id, sid);
+      moved.set(t.id, t.id);
+    }
   }
   await reconcile(windowId);
+  return moved;
 }
 
 // ---------------------------------------------------------------- tabs, pins and favorites
-
-function createTab(props) {
-  selfUntil = Date.now() + 1500;
-  return chrome.tabs.create(props);
-}
 
 async function moveTabBefore(windowId, tabId, beforeId) {
   const tabs = await chrome.tabs.query({ windowId });
@@ -608,20 +551,14 @@ async function moveTabBefore(windowId, tabId, beforeId) {
     index = b.index;
     if (me.index < index) index--;
   } else {
-    const same = tabs.filter((t) => !t.pinned && t.groupId === me.groupId);
+    const same = tabs.filter((t) => !t.pinned && spaceOfTab(t) === spaceOfTab(me));
     index = same.length ? same[same.length - 1].index : -1;
   }
   if (index !== me.index) await chrome.tabs.move(tabId, { index });
-  if (me.groupId !== -1) {
-    const after = await getTab(tabId);
-    if (after && after.groupId !== me.groupId) {
-      await chrome.tabs.group({ tabIds: [tabId], groupId: me.groupId }).catch(() => {});
-    }
-  }
 }
 
-// Moves a tab or a saved entry into the today list, the pinned list or the favorites.
-// `index` counts positions with the dragged entry already taken out.
+// Moves a tab or a saved entry into the open-tabs list, the pinned list or the
+// "every space" tiles. `index` counts positions with the dragged entry already taken out.
 async function placeItem(windowId, src, dest) {
   const active = spaceById(T.activeSpace[windowId]) ? T.activeSpace[windowId] : S.spaces[0].id;
   let tab = null;
@@ -641,7 +578,7 @@ async function placeItem(windowId, src, dest) {
     f.arr.splice(f.idx, 1);
     delete liveMap(windowId)[entry.id];
   }
-  const url = entry?.url || tab?.url || tab?.pendingUrl;
+  const url = entry?.url || tab?.url;
   if (!url) return;
 
   if (dest.zone === 'today') {
@@ -649,22 +586,23 @@ async function placeItem(windowId, src, dest) {
       if (tab.pinned) await setPinned(tab, false);
       if (dest.beforeTabId !== undefined) await moveTabBefore(windowId, tab.id, dest.beforeTabId).catch(() => {});
     } else {
-      await createTab({ windowId, url, active: false });
+      await createTab({ windowId, url, active: false }, active);
     }
   } else {
-    const item = entry || { id: uid(), title: tab?.title || hostOf(url) || url, url };
+    const item = entry || { id: uid(), title: tab?.title || hostOf(url) || url, url, icon: tab ? iconOf(tab) : '' };
     if (dest.zone === 'pinned') {
       const sid = spaceById(dest.spaceId) ? dest.spaceId : active;
+      delete item.home;
       const arr = (S.pinned[sid] ||= []);
       arr.splice(clamp(dest.index ?? arr.length, 0, arr.length), 0, item);
       if (tab) {
-        if (sid !== active) {
-          await setPinned(tab, false);
-          await tabsToSpace(windowId, [tab.id], sid);
-        }
-        liveMap(windowId)[item.id] = tab.id; // reconcile pins it in Chrome when its space is open
+        if (tab.pinned) await setPinned(tab, false);
+        let tid = tab.id;
+        if (spaceOfTab(tab) !== sid) tid = (await tabsToSpace(windowId, [tab.id], sid)).get(tab.id) ?? tab.id;
+        liveMap(windowId)[item.id] = tid;
       }
     } else {
+      item.home = tab ? spaceOfTab(tab) : entry?.home || findSpaceOfEntry(src) || active;
       S.favorites.splice(clamp(dest.index ?? S.favorites.length, 0, S.favorites.length), 0, item);
       if (tab) {
         liveMap(windowId)[item.id] = tab.id;
@@ -676,19 +614,25 @@ async function placeItem(windowId, src, dest) {
   await reconcile(windowId);
 }
 
+// Which space a pinned entry came from, when it has no open tab to tell us.
+function findSpaceOfEntry(src) {
+  return src?.fromSpace && spaceById(src.fromSpace) ? src.fromSpace : null;
+}
+
 async function openItem(windowId, id) {
   const f = findItem(id);
   if (!f) return null;
   const tid = liveMap(windowId)[id];
   let tab = tid != null ? await getTab(tid) : null;
   if (tab && tab.windowId === windowId) {
+    if (tab.hidden) await chrome.tabs.show([tab.id]).catch(() => {});
     await chrome.tabs.update(tab.id, { active: true });
     return tab;
   }
-  if (f.zone === 'pinned' && multi() && f.spaceId !== T.activeSpace[windowId]) {
-    await switchSpace(windowId, f.spaceId, { noCreate: true });
-  }
-  tab = await createTab({ windowId, url: f.item.url, active: true, pinned: f.zone === 'favs' });
+  if (f.zone === 'pinned' && f.spaceId !== T.activeSpace[windowId]) await switchSpace(windowId, f.spaceId, { noCreate: true });
+  // An "every space" tile opens in the container of the space it was added from.
+  const sid = f.zone === 'pinned' ? f.spaceId : spaceById(f.item.home) ? f.item.home : T.activeSpace[windowId];
+  tab = await createTab({ windowId, url: f.item.url, active: true, pinned: f.zone === 'favs' }, sid);
   liveMap(windowId)[id] = tab.id;
   await reconcile(windowId);
   return tab;
@@ -706,12 +650,12 @@ async function removeItem(windowId, id) {
   await reconcile(windowId);
 }
 
-// Closed tabs are not recorded here. Chrome keeps its own recently-closed list; this reads it.
+// Closed tabs are not recorded here. Firefox keeps its own recently-closed list; this reads it.
 async function recentlyClosed() {
   const sessions = await chrome.sessions.getRecentlyClosed({ maxResults: 25 });
   const items = [];
   for (const s of sessions) {
-    const at = (s.lastModified || 0) * 1000;
+    const at = s.lastModified > 1e11 ? s.lastModified : (s.lastModified || 0) * 1000;
     if (s.tab) {
       if ((s.tab.url || '').startsWith(EXT)) continue;
       items.push({ id: s.tab.sessionId, title: s.tab.title || s.tab.url, url: s.tab.url, at });
@@ -738,14 +682,7 @@ async function autoArchive() {
   const cutoff = Date.now() - hrs * 3600e3;
   const tabs = await chrome.tabs.query({ windowType: 'normal' });
   const old = tabs.filter(
-    (t) =>
-      !t.pinned &&
-      !t.active &&
-      !t.audible &&
-      t.lastAccessed &&
-      t.lastAccessed < cutoff &&
-      !itemOfTab(t.windowId, t.id) &&
-      /^https?:/.test(t.url || ''),
+    (t) => !t.pinned && !t.active && !t.audible && t.lastAccessed && t.lastAccessed < cutoff && !itemOfTab(t.windowId, t.id) && isWeb(t.url),
   );
   if (!old.length) return;
   await chrome.tabs.remove(old.map((t) => t.id)).catch(() => {});
@@ -759,10 +696,11 @@ function syncAlarm() {
 
 // ---------------------------------------------------------------- mini windows
 
-async function openMini({ url, tabId } = {}) {
+// A mini window opens in the container of the space it was opened from.
+async function openMini({ url, tabId, sid } = {}) {
   const width = clamp(Number(S.settings.miniWidth) || 980, 420, 2400);
   const height = clamp(Number(S.settings.miniHeight) || 700, 320, 1800);
-  const opts = { type: 'popup', width, height, focused: true };
+  const opts = { type: 'popup', width, height };
   try {
     const cur = await chrome.windows.getLastFocused();
     if (cur?.width) {
@@ -771,7 +709,12 @@ async function openMini({ url, tabId } = {}) {
     }
   } catch {}
   if (tabId != null) opts.tabId = tabId;
-  else opts.url = url || `${BAR_URL}?mode=mini`;
+  else {
+    opts.url = url || `${BAR_URL}?mode=mini`;
+    const sp = spaceById(sid) || spaceById(T.activeSpace[T.lastNormal]) || spaceById(S.lastSpace);
+    const store = url && sp ? await ensureStore(sp) : null;
+    if (store) opts.cookieStoreId = store;
+  }
   selfUntil = Date.now() + 1500;
   let win;
   try {
@@ -789,10 +732,9 @@ async function openMini({ url, tabId } = {}) {
 // Opens a tab's page in a mini window. The tab moves unless it is the window's only tab.
 async function popOut(tab) {
   if (!tab) return;
-  const url = tab.url || tab.pendingUrl;
   const siblings = await chrome.tabs.query({ windowId: tab.windowId });
   if (siblings.length > 1) await openMini({ tabId: tab.id });
-  else if (/^https?:/.test(url || '')) await openMini({ url });
+  else if (isWeb(tab.url)) await openMini({ url: tab.url, sid: spaceOfTab(tab) });
 }
 
 function pingMini(tabId) {
@@ -803,18 +745,22 @@ async function miniToMain(tab) {
   if (!tab || !T.mini[tab.windowId]) return;
   const wins = await chrome.windows.getAll({ windowTypes: ['normal'] });
   const target = wins.find((w) => w.id === T.lastNormal) || wins[0];
-  const url = tab.url || tab.pendingUrl;
   if (!target) {
-    await chrome.windows.create({ url });
+    await chrome.windows.create({ url: tab.url });
     await chrome.tabs.remove(tab.id).catch(() => {});
     return;
   }
+  // Its space is the one whose container it is in, else the space open in that window.
+  const sp = S.spaces.find((s) => s.store && s.store === tab.cookieStoreId) || spaceById(T.activeSpace[target.id]) || S.spaces[0];
   try {
     await chrome.tabs.move(tab.id, { windowId: target.id, index: -1 });
+    assign(tab.id, sp.id);
     await chrome.tabs.update(tab.id, { active: true });
   } catch {
-    // Chrome only moves tabs between normal windows on some versions; reopen instead.
-    await createTab({ windowId: target.id, url, active: true });
+    // Firefox does not move a tab out of a popup window, so open the page again in the same container.
+    const props = { windowId: target.id, url: tab.url, active: true };
+    if (storeOf(tab) !== DEFAULT_STORE) props.cookieStoreId = tab.cookieStoreId;
+    await createTab(props, sp.id);
     await chrome.tabs.remove(tab.id).catch(() => {});
   }
   await chrome.windows.update(target.id, { focused: true }).catch(() => {});
@@ -823,17 +769,9 @@ async function miniToMain(tab) {
 
 // ---------------------------------------------------------------- copy link
 
+// A Firefox background page may write to the clipboard directly (clipboardWrite permission).
 async function writeClipboard(text) {
-  const has = await chrome.offscreen.hasDocument();
-  if (!has) {
-    await chrome.offscreen.createDocument({
-      url: 'offscreen/offscreen.html',
-      reasons: ['CLIPBOARD'],
-      justification: 'Copy the current tab link to the clipboard.',
-    });
-  }
-  const r = await chrome.runtime.sendMessage({ type: 'arcadia:offscreen-copy', text });
-  if (!r?.ok) throw new Error('Clipboard write failed');
+  await navigator.clipboard.writeText(text);
 }
 
 async function toast(tab, text) {
@@ -868,7 +806,7 @@ function cleanUrl(url) {
 
 async function copyLink(tab, { markdown = false } = {}) {
   tab ||= (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
-  let url = tab?.url || tab?.pendingUrl;
+  let url = tab?.url;
   if (!url) return { ok: false };
   if (S.settings.cleanLinks) url = cleanUrl(url);
   await writeClipboard(markdown ? `[${(tab.title || url).replace(/[[\]]/g, '\\$&')}](${url})` : url);
@@ -878,8 +816,10 @@ async function copyLink(tab, { markdown = false } = {}) {
 
 // ---------------------------------------------------------------- command bar
 
-const injectable = (url) =>
-  /^(https?|file):/.test(url || '') && !/^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore)/.test(url);
+// Firefox keeps extensions out of its own pages and a few Mozilla sites.
+const injectable = (url) => /^(https?|file):/.test(url || '') && !/^https:\/\/(addons\.mozilla\.org|accounts\.firefox\.com|support\.mozilla\.org)\//.test(url);
+
+const frameKey = (sender) => sender.documentId || `${sender.tab.id}:${sender.frameId}`;
 
 async function showOverlay(tabId, mode, toggle = false) {
   const now = Date.now();
@@ -893,7 +833,7 @@ async function showOverlay(tabId, mode, toggle = false) {
     if (r?.ok) return true;
   } catch {}
   try {
-    // The page was open before Arcadia loaded; inject the content script now.
+    // The page was open before Arcadia loaded; inject the page script now.
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content/content.js'] });
     const r = await ask();
     return !!r?.ok;
@@ -909,10 +849,10 @@ async function openBar(windowId, mode, { toggle = false } = {}) {
   const [tab] = await chrome.tabs.query({ windowId, active: true });
   if (tab && (tab.url || '').startsWith(BAR_URL)) return;
   if (tab && !tab.discarded && injectable(tab.url) && (await showOverlay(tab.id, mode, toggle))) return;
-  await createTab({ windowId, url: `${BAR_URL}?mode=tab`, active: true });
+  await createTab({ windowId, url: START_URL, active: true });
 }
 
-// Chrome opened its new tab page: replace it with the command bar.
+// Firefox opened its new tab page: replace it with the command bar.
 async function interceptNewTab(tab) {
   const w = tab.windowId;
   const prevId = (T.hist[w] || []).find((id) => id !== tab.id) ?? tab.openerTabId;
@@ -930,8 +870,8 @@ async function interceptNewTab(tab) {
       return;
     }
   }
-  // No page to draw over (chrome:// pages, the Web Store): use a full-tab command bar.
-  await createTab({ windowId: w, url: `${BAR_URL}?mode=tab`, index: tab.index, active: true });
+  // No page to draw over (about: pages, Mozilla's add-on site): use a full-tab command bar.
+  await createTab({ windowId: w, url: START_URL, index: tab.index, active: true }, T.tabSpace[tab.id]);
   await chrome.tabs.remove(tab.id).catch(() => {});
 }
 
@@ -947,7 +887,7 @@ const ACTIONS = [
   { id: 'mute', title: 'Mute or unmute tab', words: 'sound audio', needsTab: true },
   { id: 'close', title: 'Close tab', needsTab: true },
   { id: 'clear', title: 'Close all unpinned tabs in this space', words: 'clear archive' },
-  { id: 'space-new', title: 'New space', words: 'create' },
+  { id: 'space-new', title: 'New space', words: 'create container' },
   { id: 'settings', title: 'Open Arcadia settings', words: 'options preferences' },
   { id: 'shortcuts', title: 'Edit keyboard shortcuts', words: 'keys hotkeys' },
 ];
@@ -1044,12 +984,13 @@ async function barQuery(text, windowId, ctxTab, selfTab) {
     title: t.title || t.url,
     sub: hostOf(t.url),
     url: t.url,
-    favIconUrl: t.favIconUrl,
+    icon: iconOf(t),
     hint: 'Switch to tab',
   });
   if (!q) {
+    const here = T.activeSpace[windowId];
     const recent = all
-      .filter((t) => t.windowId === windowId && t.id !== ctxTab?.id)
+      .filter((t) => t.windowId === windowId && t.id !== ctxTab?.id && (t.pinned || spaceOfTab(t) === here))
       .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))
       .slice(0, 6);
     return { ok: true, items: recent.map(tabItem) };
@@ -1062,13 +1003,12 @@ async function barQuery(text, windowId, ctxTab, selfTab) {
     .sort((a, b) => b.s - a.s || (b.t.lastAccessed || 0) - (a.t.lastAccessed || 0));
 
   const saved = [];
-  const liveIds = new Set(Object.values(liveMap(windowId)));
   const addSaved = (it, label) => {
-    if (liveMap(windowId)[it.id] != null && liveIds.has(liveMap(windowId)[it.id])) return; // already listed as a tab
+    if (liveMap(windowId)[it.id] != null) return; // already listed as a tab
     const s = score(ql, tokens, it.title, it.url);
-    if (s) saved.push({ s, item: { kind: 'item', key: `item:${it.id}`, id: it.id, title: it.title, sub: label, url: it.url, hint: 'Open' } });
+    if (s) saved.push({ s, item: { kind: 'item', key: `item:${it.id}`, id: it.id, title: it.title, sub: label, url: it.url, icon: it.icon || '', hint: 'Open' } });
   };
-  for (const f of S.favorites) addSaved(f, 'Favorite');
+  for (const f of S.favorites) addSaved(f, 'Pinned in every space');
   for (const sp of S.spaces) for (const p of S.pinned[sp.id] || []) addSaved(p, `Pinned in ${sp.name}`);
   saved.sort((a, b) => b.s - a.s);
 
@@ -1130,13 +1070,23 @@ async function barQuery(text, windowId, ctxTab, selfTab) {
   return { ok: true, items: out.slice(0, 12) };
 }
 
-// Where a chosen address goes depends on how the bar was opened.
+// Where a chosen address goes depends on how the bar was opened. A new page always
+// starts in the current space's container; the bar's own tab or window cannot change
+// container, so it is replaced rather than navigated.
 async function openUrl(url, mode, windowId, ctxTab, selfTab, background = false) {
-  if (background) return createTab({ windowId, url, active: false });
-  if (mode === 'tab' || mode === 'mini') return chrome.tabs.update(selfTab.id, { url });
-  if (mode === 'current' && ctxTab) return chrome.tabs.update(ctxTab.id, { url });
-  return createTab({ windowId, url, active: true });
+  if (mode === 'mini') {
+    await openMini({ url });
+    if (selfTab) await chrome.tabs.remove(selfTab.id).catch(() => {});
+    return;
+  }
+  if (mode === 'current' && ctxTab && !background) return chrome.tabs.update(ctxTab.id, { url });
+  const replace = mode === 'tab' && selfTab && !background;
+  const sid = selfTab ? T.tabSpace[selfTab.id] : null;
+  await createTab({ windowId, url, active: !background, ...(replace ? { index: selfTab.index } : {}) }, sid);
+  if (replace) await chrome.tabs.remove(selfTab.id).catch(() => {});
 }
+
+const webSearch = (text, tabId) => (chrome.search.query ? chrome.search.query({ text, tabId }) : chrome.search.search({ query: text, tabId }));
 
 async function barRun(m, windowId, ctxTab, selfTab) {
   const { item, mode } = m;
@@ -1145,6 +1095,7 @@ async function barRun(m, windowId, ctxTab, selfTab) {
     case 'tab': {
       const t = await getTab(item.id);
       if (!t) return { ok: false };
+      if (t.hidden) await chrome.tabs.show([t.id]).catch(() => {});
       await chrome.tabs.update(t.id, { active: true });
       await chrome.windows.update(t.windowId, { focused: true }).catch(() => {});
       if (standalone && selfTab) await chrome.tabs.remove(selfTab.id).catch(() => {});
@@ -1153,7 +1104,7 @@ async function barRun(m, windowId, ctxTab, selfTab) {
     case 'item': {
       if (mode === 'mini') {
         const f = findItem(item.id);
-        if (f) await chrome.tabs.update(selfTab.id, { url: f.item.url });
+        if (f) await openUrl(f.item.url, mode, windowId, ctxTab, selfTab);
         return { ok: true };
       }
       await openItem(windowId, item.id);
@@ -1171,11 +1122,18 @@ async function barRun(m, windowId, ctxTab, selfTab) {
     case 'search': {
       const text = String(item.title || '').trim();
       if (!text) return { ok: false };
-      if (standalone) await chrome.search.query({ text, tabId: selfTab.id });
-      else if (mode === 'current' && ctxTab) await chrome.search.query({ text, tabId: ctxTab.id });
-      else {
-        selfUntil = Date.now() + 1500;
-        await chrome.search.query({ text, disposition: 'NEW_TAB' });
+      if (mode === 'current' && ctxTab) await webSearch(text, ctxTab.id);
+      else if (mode === 'mini') {
+        const win = await openMini({ url: 'about:blank' });
+        const [t] = win.tabs || (await chrome.tabs.query({ windowId: win.id }));
+        await webSearch(text, t.id);
+        if (selfTab) await chrome.tabs.remove(selfTab.id).catch(() => {});
+      } else {
+        // Open a blank tab in this space's container first, then search in it.
+        const replace = mode === 'tab' && selfTab;
+        const t = await createTab({ windowId, url: 'about:blank', active: true, ...(replace ? { index: selfTab.index } : {}) }, selfTab ? T.tabSpace[selfTab.id] : null);
+        await webSearch(text, t.id);
+        if (replace) await chrome.tabs.remove(selfTab.id).catch(() => {});
       }
       return { ok: true };
     }
@@ -1209,8 +1167,8 @@ async function runAction(id, windowId, tab) {
       if (tab) await placeItem(windowId, { kind: 'tab', id: tab.id }, { zone: 'favs' });
       break;
     case 'unpin': {
-      const id = tab && itemOfTab(windowId, tab.id);
-      if (id) await placeItem(windowId, { kind: 'item', id }, { zone: 'today' });
+      const linked = tab && itemOfTab(windowId, tab.id);
+      if (linked) await placeItem(windowId, { kind: 'item', id: linked }, { zone: 'today' });
       else if (tab?.pinned) await setPinned(tab, false);
       break;
     }
@@ -1233,7 +1191,8 @@ async function runAction(id, windowId, tab) {
       await chrome.runtime.openOptionsPage();
       break;
     case 'shortcuts':
-      await createTab({ url: 'chrome://extensions/shortcuts' });
+      if (chrome.commands.openShortcutSettings) await chrome.commands.openShortcutSettings();
+      else await chrome.runtime.openOptionsPage();
       break;
     default:
       return { ok: false };
@@ -1250,7 +1209,8 @@ async function togglePin(windowId, tab) {
 
 // ---------------------------------------------------------------- messages
 
-const FROM_PAGES = new Set(['copy-url', 'mini:open', 'mini:toMain']);
+// The only messages a page script may send.
+const FROM_PAGES = new Set(['copy-url', 'mini:open', 'mini:toMain', 'icon:set', 'bar:failed']);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg.type !== 'string' || msg.type.startsWith('arcadia:')) return;
@@ -1264,21 +1224,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true;
 });
 
-async function route(m, sender) {
+async function route(m, sender, fromExt) {
   const tab = sender.tab || null;
   // The command bar frame inside a web page must prove Arcadia opened it.
-  const embedded = !!tab && sender.frameId > 0;
+  const embedded = fromExt && !!tab && sender.frameId > 0;
   if (embedded) {
     if (m.type === 'bar:init') {
       const t = T.tokens[m.token];
       if (!t || t.tabId !== tab.id || t.exp < Date.now()) return { ok: false };
       delete T.tokens[m.token];
-      T.docs[sender.documentId] = tab.id;
-    } else if (!T.docs[sender.documentId] || !m.type.startsWith('bar:')) {
+      T.frames[frameKey(sender)] = tab.id;
+    } else if (!T.frames[frameKey(sender)] || !m.type.startsWith('bar:')) {
       return { ok: false };
     }
   }
-  const selfIsBar = !!tab && sender.frameId === 0 && (tab.url || sender.url || '').startsWith(BAR_URL);
+  const selfIsBar = fromExt && !!tab && sender.frameId === 0 && (tab.url || sender.url || '').startsWith(BAR_URL);
   const windowId = tab?.windowId ?? m.windowId ?? T.lastNormal;
   const selfTab = selfIsBar ? tab : null;
   const mini = !!tab && !!T.mini[tab.windowId];
@@ -1331,6 +1291,7 @@ async function route(m, sender) {
       const t = f && (await getTab(liveMap(m.windowId)[m.id]));
       if (!t?.url) return { ok: false };
       f.item.url = t.url;
+      f.item.icon = iconOf(t) || f.item.icon || '';
       await saveS('pinned', 'favorites');
       notify();
       return;
@@ -1343,7 +1304,8 @@ async function route(m, sender) {
       return;
     }
     case 'tab:toSpace':
-      return tabsToSpace(m.windowId, [m.tabId], m.spaceId);
+      await tabsToSpace(m.windowId, [m.tabId], m.spaceId);
+      return;
     case 'tab:pop':
       return popOut(await getTab(m.tabId));
     case 'tab:closeOthers': {
@@ -1377,11 +1339,35 @@ async function route(m, sender) {
     }
     case 'bar:open':
       return openBar(m.windowId, m.mode || 'new');
+    case 'bar:failed': {
+      // The page would not show the in-page bar. Honoured once per bar Arcadia itself asked for.
+      const key = tab && Object.keys(T.tokens).find((k) => T.tokens[k].tabId === tab.id && T.tokens[k].exp > Date.now());
+      if (!key) return { ok: false };
+      delete T.tokens[key];
+      await createTab({ windowId: tab.windowId, url: START_URL, active: true }, T.tabSpace[tab.id]);
+      return;
+    }
+    case 'icon:set': {
+      // The page script read the site's icon out of Firefox's cache; keep it in memory for the lists.
+      if (!tab || sender.frameId !== 0 || typeof m.icon !== 'string' || !m.icon.startsWith('data:image/') || m.icon.length > 16000) return { ok: false };
+      const entry = { site: siteTag(tab.url), data: m.icon };
+      icons.set(tab.id, entry);
+      chrome.storage.session.set({ [`icon:${tab.id}`]: entry }).catch(() => {});
+      // A pinned entry keeps its own site's icon, so it still has one while asleep.
+      const id = itemOfTab(tab.windowId, tab.id);
+      const it = id && findItem(id)?.item;
+      if (it && siteTag(it.url) === entry.site && it.icon !== m.icon) {
+        it.icon = m.icon;
+        await saveS('pinned', 'favorites');
+      }
+      notify(tab.windowId);
+      return;
+    }
     case 'copy-url':
       return copyLink(tab || ctxTab, { markdown: !!m.markdown });
     case 'mini:open':
       if (!/^https?:\/\//i.test(m.url || '')) return { ok: false };
-      await openMini({ url: m.url });
+      await openMini({ url: m.url, sid: tab ? T.tabSpace[tab.id] : null });
       return;
     case 'mini:toMain':
       return miniToMain(tab);
@@ -1393,39 +1379,39 @@ async function route(m, sender) {
       for (const k of Object.keys(DEFAULT_SETTINGS)) {
         if (k in (m.patch || {}) && typeof m.patch[k] === typeof DEFAULT_SETTINGS[k]) patch[k] = m.patch[k];
       }
-      if ('sidebar' in patch && !['arcadia', 'chrome'].includes(patch.sidebar)) delete patch.sidebar;
       Object.assign(S.settings, patch);
       await saveS('settings');
       syncAlarm();
-      await syncIcon();
-      if (['collapseOtherSpaces', 'keepPinned', 'pinsPerSpace', 'sidebar'].some((k) => k in patch)) await reconcileAll();
       notify();
       return { ok: true, settings: S.settings };
     }
     case 'data:export':
-      return { ok: true, data: { arcadia: 1, spaces: S.spaces, pinned: S.pinned, favorites: S.favorites, settings: S.settings } };
+      return { ok: true, data: { arcadia: 1, spaces: S.spaces.map(({ store, ...sp }) => sp), pinned: S.pinned, favorites: S.favorites, settings: S.settings } };
     case 'data:import': {
       const d = m.data;
       if (!d || d.arcadia !== 1 || !Array.isArray(d.spaces) || !d.spaces.length) return { ok: false, error: 'This is not an Arcadia export file.' };
-      const clean = (it) => ({ id: uid(), title: String(it.title || it.url || '').slice(0, 200), url: String(it.url || ''), renamed: !!it.renamed });
+      const okIcon = (i) => (typeof i === 'string' && i.startsWith('data:image/') && i.length <= 16000 ? i : '');
+      const clean = (it) => ({ id: uid(), title: String(it.title || it.url || '').slice(0, 200), url: String(it.url || ''), renamed: !!it.renamed, icon: okIcon(it.icon) });
       const okUrl = (it) => it && /^[a-z][a-z0-9+.-]*:/i.test(it.url || '');
       const ids = new Map();
-      S.spaces = d.spaces.slice(0, 30).map((s) => {
+      S.spaces = d.spaces.slice(0, 30).map((s, i) => {
         const id = uid();
         ids.set(s.id, id);
-        return { id, name: String(s.name || 'Space').slice(0, 40), emoji: String(s.emoji || '✨').slice(0, 8), color: COLOR_NAMES.includes(s.color) ? s.color : 'blue' };
+        return { id, name: String(s.name || 'Space').slice(0, 40), emoji: String(s.emoji || '✨').slice(0, 8), color: COLOR_NAMES.includes(s.color) ? s.color : 'blue', store: null, isolated: i > 0 };
       });
       S.spaces.forEach((s) => (s.name = uniqueName(s.name, s.id)));
       S.pinned = {};
       for (const [old, arr] of Object.entries(d.pinned || {})) {
         if (ids.has(old) && Array.isArray(arr)) S.pinned[ids.get(old)] = arr.filter(okUrl).map(clean);
       }
-      S.favorites = (Array.isArray(d.favorites) ? d.favorites : []).filter(okUrl).map(clean);
-      T.groupSpace = {};
+      S.favorites = (Array.isArray(d.favorites) ? d.favorites : []).filter(okUrl).map((f) => ({ ...clean(f), home: ids.get(f.home) || S.spaces[0].id }));
+      T.tabSpace = {};
       T.activeSpace = {};
       T.live = {};
       T.relinked = {};
       await saveS('spaces', 'pinned', 'favorites');
+      // Containers with matching names are picked up again; missing ones are made.
+      for (const sp of S.spaces) await ensureStore(sp);
       await reconcileAll();
       notify();
       return;
@@ -1448,21 +1434,36 @@ chrome.tabs.onCreated.addListener((tab) =>
       return;
     }
     if (win.type !== 'normal') return;
-    const url = tab.pendingUrl || tab.url || '';
     const booting = Date.now() - T.boot < BOOT_GRACE_MS;
-    if (!booting && tab.active && S.settings.newTabOpensBar && NTP_RE.test(url)) {
+    const ours = own.has(tab.id);
+
+    // Which space is it in? A restored tab remembers; a tab opened straight into a
+    // container goes to that container's space; a tab opened from a page stays with
+    // that page; anything else joins the space that is open.
+    if (!spaceById(T.tabSpace[tab.id])) {
+      const kept = await chrome.sessions.getTabValue(tab.id, TAB_KEY).catch(() => null);
+      const byStore = storeOf(tab) !== DEFAULT_STORE ? S.spaces.find((s) => s.store === tab.cookieStoreId) : null;
+      const opener = tab.openerTabId != null ? await getTab(tab.openerTabId) : null;
+      const open = spaceById(T.activeSpace[w]) ? T.activeSpace[w] : S.spaces[0].id;
+      assign(tab.id, spaceById(kept) ? kept : byStore ? byStore.id : opener && !opener.pinned ? spaceOfTab(opener) : open);
+    }
+
+    if (!booting && tab.active && S.settings.newTabOpensBar && NTP_RE.test(tab.url || '')) {
       await interceptNewTab(tab);
       return;
     }
+    if (!ours && !booting) {
+      T.fresh[tab.id] = true;
+      tab = await settleContainer(tab);
+    }
     const cameFromOutside = T.unfocused || Date.now() - (T.focusGainAt || 0) < 1500;
-    if (!booting && S.settings.externalToMini && cameFromOutside && tab.openerTabId == null && /^https?:/.test(url) && Date.now() > selfUntil) {
+    if (!booting && !ours && Date.now() > selfUntil && S.settings.externalToMini && cameFromOutside && tab.openerTabId == null && isWeb(tab.url)) {
       const siblings = await chrome.tabs.query({ windowId: w });
       if (siblings.length > 1) {
         await openMini({ tabId: tab.id });
         return;
       }
     }
-    if (spaceById(T.activeSpace[w])) (T.born ||= {})[tab.id] = T.activeSpace[w];
     scheduleReconcile(w, 30);
     notify(w);
   }),
@@ -1478,25 +1479,38 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) =>
     // A start page you walked away from closes itself.
     const left = before != null ? await getTab(before) : null;
     if (left && left.windowId === windowId && (left.url || '').startsWith(BAR_URL)) chrome.tabs.remove(left.id).catch(() => {});
-    if (multi() && tab.groupId !== -1) {
-      const g = await chrome.tabGroups.get(tab.groupId).catch(() => null);
-      const sid = g && spaceOfGroup(g);
-      if (sid) {
-        T.lastTab[`${windowId}:${sid}`] = tabId;
-        if (T.activeSpace[windowId] !== sid) {
-          T.activeSpace[windowId] = sid;
-          rememberSpace(sid);
-          scheduleReconcile(windowId, 20);
-        }
+    // The front tab was just closed and the browser jumped to a tab of another space.
+    // Stay in the space the user was in: its most recent tab, or its start page if it is now empty.
+    // (Browsers differ on whether "closed" or "activated" is reported first, so check both.)
+    const justClosed = T.closed && T.closed.w === windowId && Date.now() - T.closed.at < 600 ? T.closed.sid : null;
+    const goneSid = justClosed || (before != null && !left ? T.tabSpace[before] : null);
+    delete T.closed;
+    if (spaceById(goneSid) && !tab.pinned && spaceOfTab(tab) !== goneSid && T.activeSpace[windowId] === goneSid) {
+      const mine = (await chrome.tabs.query({ windowId })).filter((t) => !t.pinned && spaceOfTab(t) === goneSid);
+      const pick = T.hist[windowId].map((id) => mine.find((t) => t.id === id)).find(Boolean) || mine[mine.length - 1];
+      if (pick) {
+        if (pick.hidden) await chrome.tabs.show([pick.id]).catch(() => {});
+        await chrome.tabs.update(pick.id, { active: true });
+      } else {
+        await createTab({ windowId, url: START_URL, active: true }, goneSid);
       }
-    } else if (!tab.pinned && T.activeSpace[windowId]) {
-      T.lastTab[`${windowId}:${T.activeSpace[windowId]}`] = tabId;
+      return;
+    }
+    if (!tab.pinned) {
+      // Going to a tab in another space (from the command bar, say) switches to that space.
+      const sid = spaceOfTab(tab);
+      T.lastTab[`${windowId}:${sid}`] = tabId;
+      if (T.activeSpace[windowId] !== sid) {
+        T.activeSpace[windowId] = sid;
+        rememberSpace(sid);
+        scheduleReconcile(windowId, 20);
+      }
     }
     notify(windowId);
   }),
 );
 
-const VIEW_KEYS = ['title', 'url', 'favIconUrl', 'audible', 'mutedInfo', 'status', 'discarded', 'pinned', 'groupId'];
+const VIEW_KEYS = ['title', 'url', 'favIconUrl', 'audible', 'mutedInfo', 'status', 'discarded', 'pinned', 'hidden'];
 
 chrome.tabs.onUpdated.addListener((tabId, info, tab) =>
   locked(async () => {
@@ -1505,14 +1519,13 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) =>
       if (info.status) pingMini(tabId);
       return;
     }
-    sleeperProgress(tabId, info);
     if (info.pinned !== undefined) {
       const exp = expectPin.get(tabId);
       expectPin.delete(tabId);
       const ours = !!exp && exp.pinned === info.pinned && Date.now() - exp.at < 5000;
       const id = !ours && info.pinned === false ? itemOfTab(w, tabId) : null;
       if (id) {
-        // Chrome also reports "unpinned" just before a pinned tab closes. Wait and see
+        // A browser may report "unpinned" just before a pinned tab closes. Wait and see
         // whether the tab is still there before treating this as a deliberate unpin.
         pendingUnpin.add(tabId);
         setTimeout(() => {
@@ -1529,45 +1542,35 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) =>
           }).catch(() => {});
         }, 150);
       }
+      scheduleReconcile(w);
     }
-    if (info.pinned !== undefined || info.groupId !== undefined) scheduleReconcile(w);
+    if (info.url) {
+      // A new page in this tab: any command bar frame it hosted is gone.
+      for (const k in T.frames) if (T.frames[k] === tabId) delete T.frames[k];
+      if (T.fresh[tabId] && isWeb(info.url)) await settleContainer(tab);
+    }
     if (VIEW_KEYS.some((k) => k in info)) notify(w);
   }),
 );
 
 chrome.tabs.onRemoved.addListener((tabId, info) =>
   locked(async () => {
-    const pinnedId = itemOfTab(info.windowId, tabId);
     unlinkTab(tabId);
-    if (T.born) delete T.born[tabId];
+    // If this was the tab in front, remember its space briefly, so the tab that takes its
+    // place can be checked against it.
+    const wasFront = (T.hist[info.windowId] || [])[0] === tabId;
+    if (wasFront && !info.isWindowClosing && spaceById(T.tabSpace[tabId])) T.closed = { w: info.windowId, sid: T.tabSpace[tabId], at: Date.now() };
+    delete T.tabSpace[tabId];
+    delete T.fresh[tabId];
+    own.delete(tabId);
     expectPin.delete(tabId);
     pendingUnpin.delete(tabId);
-    clearTimeout(sleepers.get(tabId)?.timer);
-    sleepers.delete(tabId);
-    if (pinnedId && !info.isWindowClosing && !panelMode()) {
-      if (S.settings.keepPinned) scheduleReconcile(info.windowId, 150); // comes back asleep
-      else {
-        const f = findItem(pinnedId);
-        if (f) {
-          f.arr.splice(f.idx, 1);
-          await saveS('pinned', 'favorites');
-        }
-      }
-    }
+    if (icons.delete(tabId)) chrome.storage.session.remove(`icon:${tabId}`).catch(() => {});
     for (const k in T.lastTab) if (T.lastTab[k] === tabId) delete T.lastTab[k];
-    for (const d in T.docs) if (T.docs[d] === tabId) delete T.docs[d];
+    for (const k in T.frames) if (T.frames[k] === tabId) delete T.frames[k];
     const h = T.hist[info.windowId];
     if (h) T.hist[info.windowId] = h.filter((id) => id !== tabId);
     if (!info.isWindowClosing) notify(info.windowId);
-  }),
-);
-
-chrome.tabs.onReplaced.addListener((added, removed) =>
-  locked(async () => {
-    for (const w in T.live) for (const k in T.live[w]) if (T.live[w][k] === removed) T.live[w][k] = added;
-    for (const w in T.hist) T.hist[w] = T.hist[w].map((id) => (id === removed ? added : id));
-    for (const k in T.lastTab) if (T.lastTab[k] === removed) T.lastTab[k] = added;
-    notify();
   }),
 );
 
@@ -1583,26 +1586,15 @@ chrome.tabs.onAttached.addListener((_id, info) => {
   notify(info.newWindowId);
 });
 
-chrome.tabGroups.onCreated.addListener((g) => scheduleReconcile(g.windowId));
-chrome.tabGroups.onRemoved.addListener((g) =>
+// A container removed in Firefox's settings takes its tabs and logins with it; the
+// space stays and gets a fresh container the next time it opens a page.
+chrome.contextualIdentities?.onRemoved.addListener((change) =>
   locked(async () => {
-    delete T.groupSpace[g.id];
-    notify(g.windowId);
-  }),
-);
-chrome.tabGroups.onUpdated.addListener((g) =>
-  locked(async () => {
-    // The event carries a snapshot that may be stale by now (our own edits queue up), so read the group again.
-    g = await chrome.tabGroups.get(g.id).catch(() => null);
-    const sid = g && spaceOfGroup(g);
-    if (!sid || !multi()) return;
-    // Expanding another space's group in Chrome's tab strip switches to that space.
-    if (S.settings.collapseOtherSpaces && !g.collapsed && T.activeSpace[g.windowId] && T.activeSpace[g.windowId] !== sid) {
-      await switchSpace(g.windowId, sid);
-      return;
-    }
-    const sp = spaceById(sid);
-    if (g.title !== sp.name || g.color !== sp.color) scheduleReconcile(g.windowId);
+    const sp = S.spaces.find((s) => s.store && s.store === change.contextualIdentity?.cookieStoreId);
+    if (!sp) return;
+    sp.store = null;
+    await saveS('spaces');
+    notify();
   }),
 );
 
@@ -1613,7 +1605,6 @@ chrome.windows.onRemoved.addListener((w) =>
   locked(async () => {
     for (const k of ['activeSpace', 'mini', 'hist', 'live', 'relinked']) delete T[k][w];
     if (T.lastNormal === w) T.lastNormal = null;
-    for (const other of await chrome.windows.getAll({ windowTypes: ['normal'] })) scheduleReconcile(other.id, 300);
   }),
 );
 chrome.windows.onFocusChanged.addListener((windowId) =>
@@ -1672,13 +1663,19 @@ chrome.commands.onCommand.addListener((command, tab) =>
 
 chrome.contextMenus.onClicked.addListener((info, tab) =>
   locked(async () => {
-    if (info.menuItemId === 'arcadia-mini-link' && /^https?:/i.test(info.linkUrl || '')) await openMini({ url: info.linkUrl });
+    if (info.menuItemId === 'arcadia-mini-link' && /^https?:/i.test(info.linkUrl || '')) await openMini({ url: info.linkUrl, sid: tab ? T.tabSpace[tab.id] : null });
     if (info.menuItemId === 'arcadia-mini-page') await popOut(tab);
   }),
 );
 
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === 'arcadia:archive') locked(autoArchive);
+});
+
+// The toolbar button shows or hides the sidebar. Firefox requires this to happen
+// directly in the click handler.
+chrome.action.onClicked.addListener(() => {
+  chrome.sidebarAction?.toggle();
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
@@ -1689,19 +1686,7 @@ chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') chrome.runtime.openOptionsPage();
 });
 
-// The toolbar icon shows or hides Arcadia's sidebar; with Chrome's vertical tabs as the
-// sidebar it opens the spaces menu instead.
-async function syncIcon() {
-  const panel = panelMode();
-  await chrome.action.setPopup({ popup: panel ? '' : 'popup/popup.html' }).catch(() => {});
-  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: panel }).catch(() => {});
-}
-
 locked(async () => {
   syncAlarm();
-  await syncIcon();
   await reconcileAll();
-  // Once session restore has settled, bring back any pinned tab that did not come back with it.
-  const wait = 9000 - (Date.now() - T.boot);
-  if (wait > 0) setTimeout(() => locked(reconcileAll).catch(() => {}), wait);
 });

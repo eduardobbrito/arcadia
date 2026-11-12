@@ -1,5 +1,6 @@
-// Runs in every page. Three small jobs: the ⇧⌘C copy-link key, shift-click to a
-// mini window, and hosting the command bar overlay and toasts for this tab.
+// Runs in every page. Four small jobs: the ⇧⌘C copy-link key, shift-click to a mini
+// window, hosting the command bar overlay and toasts for this tab, and handing
+// Arcadia the site icon the page has already loaded.
 
 (() => {
   if (window.__arcadiaAlive?.()) return;
@@ -104,7 +105,14 @@
     frame.style.cssText = 'position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; display: block; background: transparent; color-scheme: light;';
     frame.addEventListener('load', focusBar);
     root.append(frame);
-    bar = { host, frame, prev };
+    bar = { host, frame, prev, ready: false, timer: null };
+    // Some pages refuse to host the frame. If the bar never reports in, fall back to a full tab.
+    const mine = bar;
+    bar.timer = setTimeout(() => {
+      if (bar !== mine || mine.ready) return;
+      closeBar();
+      send({ type: 'bar:failed' });
+    }, 2000);
     focusBar();
   }
 
@@ -118,8 +126,9 @@
 
   function closeBar() {
     if (!bar) return;
-    const { host, prev } = bar;
+    const { host, prev, timer } = bar;
     bar = null;
+    clearTimeout(timer);
     host.remove();
     try {
       prev?.focus?.({ preventScroll: true });
@@ -127,7 +136,9 @@
   }
 
   function onMessage(e) {
-    if (bar && e.source === bar.frame.contentWindow && e.data?.arcadia === 'close') closeBar();
+    if (!bar || e.source !== bar.frame.contentWindow) return;
+    if (e.data?.arcadia === 'ready') bar.ready = true;
+    else if (e.data?.arcadia === 'close') closeBar();
   }
 
   let toastEl = null;
@@ -182,7 +193,66 @@
     pill.root.append(style, btn);
   }
 
+  // ---- site icon
+  // Firefox gives extensions no local icon store, and Arcadia's own pages never touch
+  // the network. So the page hands over the icon it has already loaded: read strictly
+  // from the browser's cache (cache: 'only-if-cached' never goes to the network) and
+  // shrunk to 32px. An icon served from another host cannot be read this way and is
+  // skipped; Arcadia then draws the site's initial.
+  let iconSent = '';
+
+  async function decode(blob) {
+    try {
+      return await createImageBitmap(blob);
+    } catch {}
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      return img;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async function reportIcon() {
+    if (!alive() || !/^https?:$/.test(location.protocol)) return;
+    try {
+      const links = [...document.querySelectorAll('link[rel~="icon" i][href]')];
+      const pick = links.find((l) => /\b(32|48)x/.test(l.getAttribute('sizes') || '')) || links[links.length - 1];
+      const href = new URL(pick ? pick.href : '/favicon.ico', location.href);
+      let blob;
+      if (href.protocol === 'data:') blob = await (await fetch(href)).blob();
+      else {
+        if (href.origin !== location.origin) return;
+        const res = await fetch(href, { cache: 'only-if-cached', mode: 'same-origin', credentials: 'omit' });
+        if (!res.ok) return;
+        blob = await res.blob();
+      }
+      const picture = await decode(blob);
+      const canvas = new OffscreenCanvas(32, 32);
+      canvas.getContext('2d').drawImage(picture, 0, 0, 32, 32);
+      const png = await canvas.convertToBlob({ type: 'image/png' });
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(png);
+      });
+      if (data === iconSent || data.length > 16000) return;
+      iconSent = data;
+      send({ type: 'icon:set', icon: data });
+    } catch {}
+  }
+
   if (isTop) {
+    const later = () => {
+      setTimeout(reportIcon, 1200);
+      setTimeout(reportIcon, 6000);
+    };
+    if (document.readyState === 'complete') later();
+    else window.addEventListener('load', later, { once: true });
     window.addEventListener('message', onMessage);
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       switch (msg?.type) {

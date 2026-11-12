@@ -1,17 +1,12 @@
-// Arcadia's own panel. Optional: Chrome's vertical tab strip is the sidebar, and
-// this panel is for people who turn it on in settings. It renders the view the
-// service worker computes for this window and sends every change back to it.
+// Arcadia's sidebar, shown in Firefox's sidebar. It renders the view the background
+// script computes for this window and sends every change back to it.
 
-import { ICON, hostOf, iconFor, cachedIcon, tint, send } from '../lib/shared.js';
+import { ICON, hostOf, iconFor, letterIcon, tint, send } from '../lib/shared.js';
 import { spaceForm } from '../lib/space-form.js';
 import { mountBar } from '../bar/bar.js';
 
 const $ = (id) => document.getElementById(id);
 const isMac = /Mac/.test(navigator.platform);
-const GLOBE = `data:image/svg+xml,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#8a8f98" stroke-width="1.4"><circle cx="8" cy="8" r="5.500"/><path d="M2.500 8h11M8 2.500c2 1.700 2 9.300 0 11M8 2.500c-2 1.700-2 9.300 0 11"/></svg>',
-)}`;
-
 let WIN = null;
 let view = null;
 let drag = null;
@@ -96,14 +91,13 @@ function syncList(parent, items, keyOf, create, update) {
   for (const el of old.values()) el.remove();
 }
 
-function setIcon(img, url, favIconUrl) {
-  const src = iconFor(url, favIconUrl) || GLOBE;
+function setIcon(img, icon, url) {
+  const src = iconFor(icon, url);
   if (img.dataset.src === src) return;
   img.dataset.src = src;
-  const fallbacks = [cachedIcon(url), GLOBE].filter((f) => f && f !== src);
   img.onerror = () => {
-    const next = fallbacks.shift();
-    if (next) img.src = next;
+    img.onerror = null;
+    img.src = letterIcon(url);
   };
   img.src = src;
 }
@@ -117,7 +111,7 @@ function makeRow() {
   return li;
 }
 
-function paintRow(li, { kind, id, tab, title, url, moved }) {
+function paintRow(li, { kind, id, tab, title, url, icon, moved }) {
   li.dataset.kind = kind;
   li.dataset.id = id ?? '';
   li.dataset.tab = tab?.id ?? '';
@@ -128,7 +122,7 @@ function paintRow(li, { kind, id, tab, title, url, moved }) {
   li.classList.toggle('muted', !!tab?.muted);
   li.classList.toggle('loading', !!tab?.loading);
   li.classList.toggle('moved', !!moved);
-  setIcon(li.querySelector('img'), tab?.url || url, tab?.favIconUrl);
+  setIcon(li.querySelector('img'), icon || tab?.icon, tab?.url || url);
   const label = title || hostOf(tab?.url || url) || 'New tab';
   const t = li.querySelector('.title');
   if (t && t.textContent !== label) t.textContent = label;
@@ -159,7 +153,7 @@ function paintTile(li, f) {
   li.classList.toggle('active', !!f.tab?.active);
   li.classList.toggle('asleep', !f.tab || (f.tab.discarded && !f.tab.active));
   li.classList.toggle('audible', !!f.tab?.audible && !f.tab?.muted);
-  setIcon(li.querySelector('img'), f.url, f.tab?.favIconUrl);
+  setIcon(li.querySelector('img'), f.icon, f.url);
   li.title = `${f.title}\n${f.url}`;
   li.setAttribute('aria-label', f.title);
 }
@@ -180,7 +174,7 @@ function render() {
   $('space-name').textContent = sp.name;
 
   syncList($('pinned'), view.pinned, (p) => `p${p.id}`, makeRow, (li, p) => paintRow(li, { kind: 'item', ...p }));
-  syncList($('today'), view.today, (t) => `t${t.id}`, makeRow, (li, t) => paintRow(li, { kind: 'tab', tab: t, title: t.title, url: t.url }));
+  syncList($('today'), view.today, (t) => `t${t.id}`, makeRow, (li, t) => paintRow(li, { kind: 'tab', tab: t, title: t.title, url: t.url, icon: t.icon }));
 
   $('empty').hidden = view.today.length > 0;
   $('empty').textContent = view.pinned.length
@@ -632,13 +626,13 @@ function ago(ts) {
   return `${Math.round(m / 1440)}d`;
 }
 
-// Chrome's own recently-closed list. Arcadia keeps no record of closed tabs.
+// Firefox's own recently-closed list. Arcadia keeps no record of closed tabs.
 async function closedSheet() {
   const r = await send('closed:get');
   const items = r?.items || [];
   sheet.innerHTML = `
     <div class="sheet-head"><h2>Recently closed</h2></div>
-    ${items.length ? '<ul class="rows"></ul>' : '<p class="note">Nothing closed recently. This list is Chrome\'s own; Arcadia keeps no record of your tabs.</p>'}`;
+    ${items.length ? '<ul class="rows"></ul>' : '<p class="note">Nothing closed recently. This list is Firefox\'s own; Arcadia keeps no record of your tabs.</p>'}`;
   const ul = sheet.querySelector('ul');
   for (const a of items) {
     const li = document.createElement('li');
@@ -648,7 +642,7 @@ async function closedSheet() {
     li.title = `${a.title}\n${a.url}`;
     const img = document.createElement('img');
     img.alt = '';
-    setIcon(img, a.url, '');
+    setIcon(img, '', a.url);
     const title = document.createElement('span');
     title.className = 'title';
     title.textContent = a.title;

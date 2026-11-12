@@ -1,0 +1,29 @@
+/* Arcadia for Firefox: make Arcadia's sidebar the only tab list.
+
+   Install (once per Firefox profile):
+   1. Open about:config and set toolkit.legacyUserProfileCustomizations.stylesheets to true.
+   2. Open about:support, find "Profile Folder" and open it. Create a folder named
+      "chrome" inside it and copy this file there, keeping the name userChrome.css.
+   3. Restart Firefox.
+
+   Remove the file (or the "chrome" folder) and restart to get the tab strip back. */
+
+/* With Firefox's title bar switched on (Customize Toolbar › Title Bar), the tab strip
+   can go completely. */
+:root:not([customtitlebar], [tabsintitlebar]) #TabsToolbar {
+  visibility: collapse !important;
+}
+
+/* Without a title bar the strip also carries the window's close, minimise and zoom
+   buttons, so it stays as a slim empty bar and only the tabs are removed. */
+:root:is([customtitlebar], [tabsintitlebar]) #TabsToolbar .toolbar-items {
+  visibility: collapse !important;
+}
+:root:is([customtitlebar], [tabsintitlebar]) #TabsToolbar {
+  min-height: 28px !important;
+}
+
+/* Arcadia has its own space title, so hide the sidebar's header row while it is showing. */
+#sidebar-box[sidebarcommand^="arcadia_"] #sidebar-header {
+  display: none !important;
+}

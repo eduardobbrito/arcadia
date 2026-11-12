@@ -29,6 +29,8 @@ const bar = mountBar(document.getElementById('root'), {
     } else if (!info?.dead) dismiss();
   },
   onReady: (r) => {
+    // Tell the page script the bar made it, or it falls back to a full tab.
+    if (embedded) window.parent.postMessage({ arcadia: 'ready' }, '*');
     if (embedded || !r.space) return;
     tint(document.body, r.space.color);
     const label = document.getElementById('ab-space');

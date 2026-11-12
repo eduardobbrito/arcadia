@@ -1,0 +1,39 @@
+/* Colour tokens shared by Arcadia's pages. Everything is washed in the current
+   space's colour: --h (hue) and --c (chroma) are set from it in lib/shared.js. */
+
+:root {
+  --h: 255;
+  --c: 0.15;
+  --bg: oklch(95.5% calc(var(--c) * 0.24) var(--h));
+  --bg-2: oklch(92% calc(var(--c) * 0.36) var(--h));
+  --ink: oklch(25% calc(var(--c) * 0.3) var(--h));
+  --muted: oklch(47% calc(var(--c) * 0.35) var(--h));
+  --hover: oklch(35% var(--c) var(--h) / 0.08);
+  --card: oklch(100% 0 0 / 0.82);
+  --card-edge: 0 1px 2px oklch(35% var(--c) var(--h) / 0.14), 0 0 0 0.5px oklch(35% var(--c) var(--h) / 0.1);
+  --tile: oklch(100% 0 0 / 0.5);
+  --accent: oklch(54% var(--c) var(--h));
+  --on-accent: #fff;
+  --line: oklch(35% var(--c) var(--h) / 0.14);
+  --float: oklch(99% calc(var(--c) * 0.06) var(--h));
+  --float-edge: 0 0 0 0.5px oklch(30% var(--c) var(--h) / 0.2), 0 12px 32px -6px oklch(25% var(--c) var(--h) / 0.35);
+  --danger: oklch(52% 0.19 25);
+  --display: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+[data-theme="dark"] {
+  --bg: oklch(24% calc(var(--c) * 0.3) var(--h));
+  --bg-2: oklch(19.5% calc(var(--c) * 0.3) var(--h));
+  --ink: oklch(94% calc(var(--c) * 0.12) var(--h));
+  --muted: oklch(73% calc(var(--c) * 0.28) var(--h));
+  --hover: oklch(100% 0 0 / 0.07);
+  --card: oklch(100% 0 0 / 0.15);
+  --card-edge: 0 0 0 0.5px oklch(100% 0 0 / 0.12);
+  --tile: oklch(100% 0 0 / 0.08);
+  --accent: oklch(76% var(--c) var(--h));
+  --on-accent: oklch(20% calc(var(--c) * 0.4) var(--h));
+  --line: oklch(100% 0 0 / 0.11);
+  --float: oklch(29% calc(var(--c) * 0.2) var(--h));
+  --float-edge: 0 0 0 0.5px oklch(100% 0 0 / 0.16), 0 12px 32px -6px oklch(5% 0.02 var(--h) / 0.7);
+  --danger: oklch(74% 0.16 25);
+}

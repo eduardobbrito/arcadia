@@ -1,0 +1,122 @@
+{
+  "manifest_version": 3,
+  "name": "Arcadia: spaces, sidebar and command bar",
+  "short_name": "Arcadia",
+  "version": "0.1.0",
+  "description": "An Arc-style sidebar for Chrome: spaces, pinned tabs, swipe between spaces, a command bar on new tab, mini windows and one-key link copying. Private: no network, no tracking.",
+  "minimum_chrome_version": "121",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "sidePanel",
+    "storage",
+    "scripting",
+    "sessions",
+    "history",
+    "bookmarks",
+    "favicon",
+    "search",
+    "contextMenus",
+    "offscreen",
+    "clipboardWrite",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; object-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+  "action": {
+    "default_title": "Show or hide the Arcadia sidebar",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "bar/bar.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Show or hide the sidebar"
+    },
+    "command-bar": {
+      "suggested_key": {
+        "default": "Alt+Shift+K"
+      },
+      "description": "Open the command bar"
+    },
+    "copy-url": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+C",
+        "mac": "Command+Shift+C"
+      },
+      "description": "Copy the current page link"
+    },
+    "mini-window": {
+      "suggested_key": {
+        "default": "Alt+Shift+M"
+      },
+      "description": "Open a mini window"
+    },
+    "command-bar-current": {
+      "description": "Edit the current address in the command bar"
+    },
+    "copy-url-markdown": {
+      "description": "Copy the current page link as Markdown"
+    },
+    "next-space": {
+      "description": "Go to the next space"
+    },
+    "previous-space": {
+      "description": "Go to the previous space"
+    },
+    "toggle-pin": {
+      "description": "Pin or unpin the current tab"
+    },
+    "pop-out": {
+      "description": "Open the current tab in a mini window"
+    }
+  }
+}

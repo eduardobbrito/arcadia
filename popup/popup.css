@@ -1,0 +1,102 @@
+/* The spaces menu that opens from the toolbar icon. Colour tokens: lib/theme.css. */
+
+* { box-sizing: border-box; }
+
+html { width: 300px; }
+
+body {
+  margin: 0;
+  padding: 8px;
+  background: linear-gradient(180deg, var(--bg), var(--bg-2));
+  color: var(--ink);
+  font: 13px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+button { font: inherit; color: inherit; cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+main[hidden] { display: none; }
+
+#spaces { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+#spaces li { display: flex; align-items: center; gap: 2px; border-radius: 10px; }
+#spaces li:hover { background: var(--hover); }
+#spaces li.current { background: var(--card); box-shadow: var(--card-edge); }
+
+.sp {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  text-align: left;
+}
+.sp .dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: oklch(64% var(--sc) var(--sh));
+}
+.sp .emoji { flex: none; font-size: 15px; }
+.sp .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 13.5px/1.2 var(--display); }
+.sp .count { flex: none; color: var(--muted); font-size: 12px; }
+
+.edit {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  margin-right: 4px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  opacity: 0;
+}
+#spaces li:hover .edit, .edit:focus-visible, #spaces li.current .edit { opacity: 1; }
+.edit:hover { background: var(--hover); color: var(--ink); }
+
+.add {
+  width: 100%;
+  height: 36px;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--muted);
+  text-align: left;
+}
+.add:hover { background: var(--hover); color: var(--ink); }
+.add .plus { display: grid; width: 16px; place-items: center; }
+
+.note { margin: 8px 10px 4px; color: var(--muted); line-height: 1.45; }
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+footer button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+footer button:hover { background: var(--hover); color: var(--ink); }
+
+#editor { padding: 8px 6px 6px; }

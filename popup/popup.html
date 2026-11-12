@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Arcadia spaces</title>
+<link rel="stylesheet" href="../lib/theme.css">
+<link rel="stylesheet" href="../lib/space-form.css">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<main id="list">
+  <ul id="spaces" aria-label="Spaces"></ul>
+  <button type="button" class="add" id="new"><span class="plus"></span>New space</button>
+  <p class="note" id="hint" hidden></p>
+  <footer>
+    <button type="button" id="mini">New mini window</button>
+    <button type="button" id="settings">Settings</button>
+  </footer>
+</main>
+<main id="editor" hidden></main>
+<script type="module" src="popup.js"></script>
+</body>
+</html>
